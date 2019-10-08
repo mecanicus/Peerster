@@ -1,5 +1,7 @@
 package main
 
+//TODO: EN MODO SIMPLE NO SE GUARDAN BIEN LOS PEERS
+//TODO: HAY UN PROBLEMA CUANDO ESTAS IN SYNC PERO TE HABLA ALGUIEN CON QUIEN NO TIENES SESION
 import (
 	"flag"
 	"fmt"
@@ -66,7 +68,7 @@ func flagReader() (*string, *string, *bool, *int, *string) {
 	gossipAddr := flag.String("gossipAddr", "127.0.0.1:5000", "gossipAddr")
 	gossiperName := flag.String("name", "GossiperName", "name")
 	peersList := flag.String("peers", " ", "peers list")
-	gossiperMode := flag.Bool("simple", true, "mode to run")
+	gossiperMode := flag.Bool("simple", false, "mode to run")
 	flag.Parse()
 
 	return gossipAddr, gossiperName, gossiperMode, uiPort, peersList
@@ -162,6 +164,8 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 		talkingPeersMap := gossiper.TalkingPeers
 		_, exists := talkingPeersMap[peerTalking]
 		//Anadir a la lista de peers si necesario
+		fmt.Print("sender ")
+		fmt.Println(sender)
 		if checkPeersList(sender, gossiper) == false {
 			addPeerToList(sender, gossiper)
 		}
@@ -175,12 +179,14 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 				statusDecisionMaking(sender, message, gossiper)
 				//Reiniciar el timeout
 				connectionRenewal(peerTalking, gossiper)
+				continue
 
 				//Es un mensaje de status de alguien nuevo, probablemente algoritmo anti entrophy
 			} else {
 				statusDecisionMaking(sender, message, gossiper)
 				//TODO: Abrir conexion, probablemente sea del algoritmo antientropia? REVISAR
 				//connectionCreationStatusMessage(peerTalking, gossiper)
+				continue
 			}
 
 			//Es un mensaje de rumor
@@ -197,12 +203,14 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 
 					//Mandar un mensaje de status de vuelta (todo ok)
 					createNewStatusPackageAndSend(sender, gossiper)
+					continue
 
 				} else {
 					//El paquete no es nuevo o es muy nuevo, mandar status de vuelta
 					//No parece necesario renovar la conexion
 					//connectionRenewal(peerTalking, gossiper)
 					createNewStatusPackageAndSend(sender, gossiper)
+					continue
 				}
 
 				//No tenemos una conexion abierta con el
@@ -214,10 +222,12 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 
 					//Mandar un mensaje de status de vuelta (todo ok)
 					createNewStatusPackageAndSend(sender, gossiper)
+					continue
 
 				} else {
 					//El paquete no es nuevo o es muy nuevo, mandar status de vuelta
 					createNewStatusPackageAndSend(sender, gossiper)
+					continue
 				}
 			}
 		}
@@ -231,9 +241,15 @@ func connectionCreationRumorMessage(sender string, message *RumorMessage, gossip
 		MessageToGossip: message,
 		Timeout:         10,
 	}
+	gossiper.TalkingPeers = talkingPeersMap
 }
 func connectionRenewal(sender string, gossiper *Gossiper) {
-	gossiper.TalkingPeers[sender].Timeout = 10
+	if gossiper.TalkingPeers[sender] != nil {
+		gossiper.TalkingPeers[sender].Timeout = 10
+	} else {
+		return
+	}
+
 }
 
 func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
@@ -249,12 +265,19 @@ func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
 
 		// Do stuff with the read bytes
 		clientMessage := string(buf[0:rlen])
+		//TODO: Salvar el mensaje y incrementar el ID
 
+		IDMessage := gossiper.Want[0].NextID
 		message := RumorMessage{
 			Origin: gossiper.Name,
-			ID:     0,
+			ID:     IDMessage,
 			Text:   clientMessage,
 		}
+		gossiper.Want[0].NextID = gossiper.Want[0].NextID + 1
+		messaggesOfClient := gossiper.SavedMessages[gossiper.Name]
+		messaggesOfClient = append(messaggesOfClient, message)
+		gossiper.SavedMessages[gossiper.Name] = messaggesOfClient
+
 		fmt.Println("CLIENT MESSAGE " + message.Text)
 		sendToPeersComingFromClientNotSimple(&message, gossiper)
 	}
@@ -427,15 +450,20 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 	if (rand.Int() % 2) == 0 {
 		//Cerrar el objeto conexion con quien estamos hablando y abrir una nueva con el afortunado
 		senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
-		//Recuperamos el mensaje
-		messageInClosingSesion := gossiper.TalkingPeers[senderAddress].MessageToGossip
-		//Cerramos la sesion
-		delete(gossiper.TalkingPeers, senderAddress)
 
-		//Elegimos nuevo peer y le mandamos la sesion
-		choosenPeer := choseRandomPeerAndSendRumorPackage(messageInClosingSesion, gossiper)
-		connectionCreationRumorMessage(choosenPeer, messageInClosingSesion, gossiper)
-		fmt.Println("FLIPPED COIN sending rumor to " + choosenPeer)
+		//Aqui se deberia entrar siempre excepto si es el caso de antientropia
+		//Que te escriben un status packet y teneis los mismos paquetes
+		//O si alguien te escribe y no te vale ningun paquete y tu le das tuyos
+		if gossiper.TalkingPeers[senderAddress] != nil {
+			//Recuperamos el mensaje
+			messageInClosingSesion := gossiper.TalkingPeers[senderAddress].MessageToGossip
+			//Cerramos la sesion
+			delete(gossiper.TalkingPeers, senderAddress)
+			//Elegimos nuevo peer y le mandamos la sesion
+			choosenPeer := choseRandomPeerAndSendRumorPackage(messageInClosingSesion, gossiper)
+			connectionCreationRumorMessage(choosenPeer, messageInClosingSesion, gossiper)
+			fmt.Println("FLIPPED COIN sending rumor to " + choosenPeer)
+		}
 
 	} else {
 		//Borramos la conexion y nos quedamos quietos
@@ -447,12 +475,18 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *bool, uiPort *int, peerList *string) *Gossiper {
 
 	splitterAux := strings.Split(*peerList, ",")
+	wantList := make([]PeerStatus, 5)
+	wantList[0] = PeerStatus{
+		Identifier: *gossiperName,
+		NextID:     0,
+	}
 	return &Gossiper{
 		Addr:          *gossipAddr,
 		UIPort:        *uiPort,
 		Name:          *gossiperName,
 		KnownPeers:    splitterAux,
 		Mode:          *gossiperMode,
+		Want:          wantList,
 		SavedMessages: make(map[string][]RumorMessage),
 		TalkingPeers:  make(map[string]*ConectionInfo),
 	}
