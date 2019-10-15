@@ -4,6 +4,9 @@ import (
 	"flag"
 	"net"
 	"strconv"
+
+	"github.com/dedis/protobuf"
+	. "github.com/mecanicus/Peerster/types"
 )
 
 func flagReader() (*int, *string) {
@@ -20,15 +23,15 @@ func main() {
 
 	UIport, msg := flagReader()
 	ip := "127.0.0.1:" + strconv.Itoa(*UIport)
-	//ip2 := "127.0.0.1:1000"
+
+	message := &Message{
+		Text: *msg,
+	}
+	packetToSend := message
+	packetBytes, _ := protobuf.Encode(packetToSend)
 	conn, err := net.Dial("udp", ip)
-	//packetBytes, err := packetToSend
-	//fmt.Println(strconv.Itoa(*UIport))
-	_, err = conn.Write([]byte(*msg))
+	_, err = conn.Write(packetBytes)
 	if err != nil {
 		panic(err)
 	}
-
-	//packetToSend := GossipPacket{Simple: simplemessage}
-
 }

@@ -7,71 +7,37 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dedis/protobuf"
+	. "github.com/mecanicus/Peerster/types"
 )
 
-type SimpleMessage struct {
-	OriginalName  string
-	RelayPeerAddr string
-	Contents      string
-}
-type RumorMessage struct {
-	Origin string
-	ID     uint32
-	Text   string
-}
-type PeerStatus struct {
-	Identifier string
-	NextID     uint32
-}
-type ConectionInfo struct {
-	MessageToGossip *RumorMessage
-	Timeout         int //Tambien se podria meter aqui un timer
-}
-type StatusPacket struct {
-	Want []PeerStatus
-}
-
 type Gossiper struct {
-	UIPort        int
-	Addr          string
-	Name          string
-	KnownPeers    []string
-	Mode          bool
-	Want          []PeerStatus
-	SavedMessages map[string][]RumorMessage
-	TalkingPeers  map[string]*ConectionInfo
-	socket        *GossiperSocket
-}
-type GossiperSocket struct {
-	address *net.UDPAddr
-	conn    *net.UDPConn
-}
-type GossipPacket struct {
-	Simple *SimpleMessage
-	Rumor  *RumorMessage
-	Status *StatusPacket
+	UIPort             int
+	Addr               string
+	Name               string
+	KnownPeers         []string
+	Mode               bool
+	Want               []PeerStatus
+	SavedMessages      map[string][]RumorMessage
+	TalkingPeers       map[string]ConectionInfo
+	Socket             *GossiperSocket
+	AntiEntropyTimeout int
 }
 
-type UDPAddr struct {
-	IP   net.IP
-	Port int
-	Zone string // IPv6 scoped addressing zone
-}
-
-func flagReader() (*string, *string, *bool, *int, *string) {
+func flagReader() (*string, *string, *bool, *int, *string, *int) {
 	uiPort := flag.Int("UIPort", 8080, "UIPort")
 	gossipAddr := flag.String("gossipAddr", "127.0.0.1:5000", "gossipAddr")
 	gossiperName := flag.String("name", "GossiperName", "name")
 	peersList := flag.String("peers", " ", "peers list")
 	gossiperMode := flag.Bool("simple", false, "mode to run")
+	antiEntropyTimeout := flag.Int("antiEntropy", 10, "Anti entropy timeout")
 	flag.Parse()
-
-	return gossipAddr, gossiperName, gossiperMode, uiPort, peersList
+	return gossipAddr, gossiperName, gossiperMode, uiPort, peersList, antiEntropyTimeout
 }
 
 func gossiperUISocketOpen(address string, UIPort int) *GossiperSocket {
@@ -85,8 +51,8 @@ func gossiperUISocketOpen(address string, UIPort int) *GossiperSocket {
 		panic(err)
 	}
 	return &GossiperSocket{
-		address: udpAddr,
-		conn:    udpConn,
+		Address: udpAddr,
+		Conn:    udpConn,
 	}
 
 }
@@ -102,15 +68,15 @@ func gossiperSocketOpen(address string) *GossiperSocket {
 	}
 
 	return &GossiperSocket{
-		address: udpAddr,
-		conn:    udpConn,
+		Address: udpAddr,
+		Conn:    udpConn,
 	}
 
 }
 func listenSocket(socket *GossiperSocket, gossiper *Gossiper) {
 	buf := make([]byte, 2000)
 	for {
-		_, sender, err := socket.conn.ReadFromUDP(buf)
+		_, _, err := socket.Conn.ReadFromUDP(buf)
 		if err != nil {
 			panic(err)
 		}
@@ -120,30 +86,31 @@ func listenSocket(socket *GossiperSocket, gossiper *Gossiper) {
 		message := packet.Simple
 		fmt.Println("SIMPLE MESSAGE origin " + message.OriginalName + " from " + message.RelayPeerAddr + " contents " + message.Contents)
 
-		if checkPeersList(sender, gossiper) == false {
-			addPeerToList(sender, gossiper)
+		if checkPeersListSimple(message.RelayPeerAddr, gossiper) == false {
+			addPeerToListSimple(message.RelayPeerAddr, gossiper)
 		}
 		sendToPeersComingFromPeer(message, gossiper)
 	}
 }
 
 func listenUISocket(UISocket *GossiperSocket, gossiper *Gossiper) {
-	var buf [2000]byte
+	buf := make([]byte, 2000)
 	for {
 		//print("Hello")
 
-		rlen, _, err := UISocket.conn.ReadFromUDP(buf[:])
+		_, _, err := UISocket.Conn.ReadFromUDP(buf)
 
 		if err != nil {
 			panic(err)
 		}
+		packet := &Message{}
+		protobuf.Decode(buf, packet)
+		//TODO: Salvar el mensaje y incrementar el ID
 
-		// Do stuff with the read bytes
-		clientMessage := string(buf[0:rlen])
 		message := SimpleMessage{
 			OriginalName:  gossiper.Name,
 			RelayPeerAddr: gossiper.Addr,
-			Contents:      clientMessage,
+			Contents:      packet.Text,
 		}
 		fmt.Println("CLIENT MESSAGE " + message.Contents)
 		sendToPeersComingFromClient(&message, gossiper)
@@ -152,7 +119,7 @@ func listenUISocket(UISocket *GossiperSocket, gossiper *Gossiper) {
 func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 	buf := make([]byte, 2000)
 	for {
-		_, sender, err := socket.conn.ReadFromUDP(buf)
+		_, sender, err := socket.Conn.ReadFromUDP(buf)
 		if err != nil {
 			panic(err)
 		}
@@ -164,8 +131,6 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 		talkingPeersMap := gossiper.TalkingPeers
 		_, exists := talkingPeersMap[peerTalking]
 		//Anadir a la lista de peers si necesario
-		fmt.Print("sender ")
-		fmt.Println(sender)
 		if checkPeersList(sender, gossiper) == false {
 			addPeerToList(sender, gossiper)
 		}
@@ -176,9 +141,10 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 
 			//Es un mensaje de status de una conexion abierta
 			if exists == true {
+				connectionRenewal(peerTalking, gossiper)
 				statusDecisionMaking(sender, message, gossiper)
 				//Reiniciar el timeout
-				connectionRenewal(peerTalking, gossiper)
+
 				continue
 
 				//Es un mensaje de status de alguien nuevo, probablemente algoritmo anti entrophy
@@ -188,7 +154,6 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 				//connectionCreationStatusMessage(peerTalking, gossiper)
 				continue
 			}
-
 			//Es un mensaje de rumor
 		} else {
 			fmt.Println("RUMOR origin " + message.Origin + " from " + peerTalking + " ID " + fmt.Sprint(message.ID) + " contents " + message.Text)
@@ -217,6 +182,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 			} else {
 				if checkingIfExpectedMessageAndSave(message, gossiper) == true {
 					//Empezar rumormorgering process con otro peer
+
 					choosenPeer := choseRandomPeerAndSendRumorPackage(message, gossiper)
 					connectionCreationRumorMessage(choosenPeer, message, gossiper)
 
@@ -237,15 +203,21 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 func connectionCreationRumorMessage(sender string, message *RumorMessage, gossiper *Gossiper) {
 
 	talkingPeersMap := gossiper.TalkingPeers
-	talkingPeersMap[sender] = &ConectionInfo{
+	talkingPeersMap[sender] = ConectionInfo{
 		MessageToGossip: message,
 		Timeout:         10,
 	}
+
 	gossiper.TalkingPeers = talkingPeersMap
 }
 func connectionRenewal(sender string, gossiper *Gossiper) {
-	if gossiper.TalkingPeers[sender] != nil {
-		gossiper.TalkingPeers[sender].Timeout = 10
+	_, ok := gossiper.TalkingPeers[sender]
+	if ok {
+		talkingPeersMap := gossiper.TalkingPeers
+		talkingPeersMap[sender] = ConectionInfo{
+			MessageToGossip: gossiper.TalkingPeers[sender].MessageToGossip,
+			Timeout:         10,
+		}
 	} else {
 		return
 	}
@@ -253,25 +225,25 @@ func connectionRenewal(sender string, gossiper *Gossiper) {
 }
 
 func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
-	var buf [2000]byte
+
+	buf := make([]byte, 2000)
 	for {
 		//print("Hello")
 
-		rlen, _, err := UISocket.conn.ReadFromUDP(buf[:])
+		_, _, err := UISocket.Conn.ReadFromUDP(buf)
 
 		if err != nil {
 			panic(err)
 		}
-
-		// Do stuff with the read bytes
-		clientMessage := string(buf[0:rlen])
+		packet := &Message{}
+		protobuf.Decode(buf, packet)
 		//TODO: Salvar el mensaje y incrementar el ID
 
 		IDMessage := gossiper.Want[0].NextID
 		message := RumorMessage{
 			Origin: gossiper.Name,
 			ID:     IDMessage,
-			Text:   clientMessage,
+			Text:   packet.Text,
 		}
 		gossiper.Want[0].NextID = gossiper.Want[0].NextID + 1
 		messaggesOfClient := gossiper.SavedMessages[gossiper.Name]
@@ -291,6 +263,19 @@ func checkPeersList(sender *net.UDPAddr, gossiper *Gossiper) bool {
 	}
 	return false
 }
+func checkPeersListSimple(relayAddress string, gossiper *Gossiper) bool {
+	peerAddress := relayAddress
+	for _, peerAddressExaminated := range gossiper.KnownPeers {
+		if peerAddress == peerAddressExaminated {
+			return true
+		}
+	}
+	return false
+}
+func addPeerToListSimple(relayAddress string, gossiper *Gossiper) {
+	peerAddress := relayAddress
+	gossiper.KnownPeers = append(gossiper.KnownPeers, peerAddress)
+}
 func addPeerToList(sender *net.UDPAddr, gossiper *Gossiper) {
 	peerAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
 	gossiper.KnownPeers = append(gossiper.KnownPeers, peerAddress)
@@ -300,17 +285,8 @@ func sendToPeersComingFromClient(message *SimpleMessage, gossiper *Gossiper) {
 	fmt.Print("PEERS ")
 	packetBytes, _ := protobuf.Encode(packetToSend)
 	for index, peerAddress := range gossiper.KnownPeers {
-		conn, err := net.Dial("udp", peerAddress)
-		/*fmt.Print("Paquete contenidos: ")
-		fmt.Println(packetToSend.Simple.OriginalName)*/
-		/*fmt.Println(packetBytes)
-		fmt.Print("Paquete: ")
-		fmt.Println(packetToSend)*/
-		//fmt.Println(packetToSend.Simple)
-		_, err = conn.Write(packetBytes)
-		if err != nil {
-			panic(err)
-		}
+		choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerAddress)
+		gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
 		if index == (len(gossiper.KnownPeers) - 1) {
 			fmt.Println(peerAddress)
 			continue
@@ -349,12 +325,9 @@ func sendToPeersComingFromPeer(message *SimpleMessage, gossiper *Gossiper) {
 			continue
 		} else {
 
-			conn, err := net.Dial("udp", peerAddress)
-			packetBytes, err := protobuf.Encode(packetToSend)
-			_, err = conn.Write(packetBytes)
-			if err != nil {
-				panic(err)
-			}
+			packetBytes, _ := protobuf.Encode(packetToSend)
+			choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerAddress)
+			gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
 		}
 		if index == (len(gossiper.KnownPeers) - 1) {
 			fmt.Println(peerAddress)
@@ -366,6 +339,22 @@ func sendToPeersComingFromPeer(message *SimpleMessage, gossiper *Gossiper) {
 func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper) bool {
 	origin := message.Origin
 	ID := message.ID
+	check := true
+	for _, peerStatusExaminated := range gossiper.Want {
+
+		if peerStatusExaminated.Identifier == origin {
+			//println("matched on:" + origin)
+			//fmt.Println(gossiper.Want)
+			check = false
+		}
+	}
+	if check == true {
+		wantInfo := PeerStatus{
+			Identifier: origin,
+			NextID:     1,
+		}
+		gossiper.Want = append(gossiper.Want, wantInfo)
+	}
 	for index, peerStatusExaminated := range gossiper.Want {
 		if origin == peerStatusExaminated.Identifier {
 			if ID == (peerStatusExaminated.NextID) {
@@ -374,6 +363,7 @@ func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper)
 				//Es importante que los guarde en orden de llegada, para sacarlos por orden tmb
 				messaggesOfOrigin = append(messaggesOfOrigin, *message)
 				gossiper.SavedMessages[origin] = messaggesOfOrigin
+				gossiper.Want[index].Identifier = origin
 				gossiper.Want[index].NextID = ID + 1
 				return true
 			}
@@ -385,7 +375,6 @@ func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper)
 func createNewStatusPackageAndSend(sender *net.UDPAddr, gossiper *Gossiper) {
 	statusPacket := &StatusPacket{Want: gossiper.Want}
 	packetToSend := &GossipPacket{Status: statusPacket}
-
 	//senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
 	//conn, err := net.Dial("udp", senderAddress)
 	//_, err = conn.Write(packetBytes)
@@ -393,23 +382,31 @@ func createNewStatusPackageAndSend(sender *net.UDPAddr, gossiper *Gossiper) {
 	if err != nil {
 		panic(err)
 	}
-	gossiper.socket.conn.WriteToUDP(packetBytes, sender)
+	gossiper.Socket.Conn.WriteToUDP(packetBytes, sender)
 }
 func sendRumorPackage(rumorMessage *RumorMessage, sender *net.UDPAddr, gossiper *Gossiper) {
 	packetToSend := &GossipPacket{Rumor: rumorMessage}
 	packetBytes, err := protobuf.Encode(packetToSend)
-	gossiper.socket.conn.WriteToUDP(packetBytes, sender)
+	senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
+	fmt.Println("MONGERING with " + senderAddress)
+	gossiper.Socket.Conn.WriteToUDP(packetBytes, sender)
 	if err != nil {
 		panic(err)
 	}
 }
 func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, gossiper *Gossiper) {
 	senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
-	fmt.Println("STATUS from " + senderAddress + " peer " + statusMessage.Want[0].Identifier + " nextID " + fmt.Sprint(statusMessage.Want[0].NextID) + " peer " + statusMessage.Want[1].Identifier + " nextID " + fmt.Sprint(statusMessage.Want[1].NextID))
+	stringToSend := ""
+	for _, peerWantStatus := range statusMessage.Want {
+		stringToSend = stringToSend + " peer " + peerWantStatus.Identifier + " nextID " + fmt.Sprint(peerWantStatus.NextID)
+	}
+	fmt.Println("STATUS from " + senderAddress + stringToSend)
 
 	for _, peerStatusExaminated := range gossiper.Want {
+		newPeer := true
 		for _, peerStatusExaminatedOfOtherPeer := range statusMessage.Want {
 			if peerStatusExaminated.Identifier == peerStatusExaminatedOfOtherPeer.Identifier {
+				newPeer = false
 				//Estamos mirando la misma persona tanto en memoria local como en el otro peer
 				if peerStatusExaminated.NextID == (peerStatusExaminatedOfOtherPeer.NextID) {
 					continue
@@ -418,7 +415,8 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 				} else if peerStatusExaminated.NextID > peerStatusExaminatedOfOtherPeer.NextID {
 					//Tenemos mas mensajes que el otro, es decir podemos enviar mas, mandar rumour package
 					for _, rumorMesagesOfAPeer := range gossiper.SavedMessages[peerStatusExaminated.Identifier] {
-						if rumorMesagesOfAPeer.ID == (peerStatusExaminated.NextID - 1) {
+						if rumorMesagesOfAPeer.ID == (peerStatusExaminatedOfOtherPeer.NextID) {
+
 							//Se busca el mensaje que el otro no tiene y se le manda
 							rumorMessage := rumorMesagesOfAPeer
 							sendRumorPackage(&rumorMessage, sender, gossiper)
@@ -427,6 +425,15 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 					}
 				}
 			}
+		}
+		if newPeer {
+			//El otro no tiene conocimiento de este hombre, le mando el primer mensaje de el
+			if peerStatusExaminated.NextID != 1 {
+				rumorMessage := gossiper.SavedMessages[peerStatusExaminated.Identifier][0]
+				sendRumorPackage(&rumorMessage, sender, gossiper)
+				return
+			}
+
 		}
 	}
 	//Si llegamos aqui es porque no tenemos ningun mensaje mas que el otro
@@ -454,7 +461,8 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 		//Aqui se deberia entrar siempre excepto si es el caso de antientropia
 		//Que te escriben un status packet y teneis los mismos paquetes
 		//O si alguien te escribe y no te vale ningun paquete y tu le das tuyos
-		if gossiper.TalkingPeers[senderAddress] != nil {
+		_, ok := gossiper.TalkingPeers[senderAddress]
+		if ok {
 			//Recuperamos el mensaje
 			messageInClosingSesion := gossiper.TalkingPeers[senderAddress].MessageToGossip
 			//Cerramos la sesion
@@ -472,27 +480,28 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 	}
 }
 
-func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *bool, uiPort *int, peerList *string) *Gossiper {
+func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *bool, uiPort *int, peerList *string, antiEntropyTimeout *int) *Gossiper {
 
 	splitterAux := strings.Split(*peerList, ",")
-	wantList := make([]PeerStatus, 5)
+	wantList := make([]PeerStatus, 1)
 	wantList[0] = PeerStatus{
 		Identifier: *gossiperName,
-		NextID:     0,
+		NextID:     1,
 	}
 	return &Gossiper{
-		Addr:          *gossipAddr,
-		UIPort:        *uiPort,
-		Name:          *gossiperName,
-		KnownPeers:    splitterAux,
-		Mode:          *gossiperMode,
-		Want:          wantList,
-		SavedMessages: make(map[string][]RumorMessage),
-		TalkingPeers:  make(map[string]*ConectionInfo),
+		Addr:               *gossipAddr,
+		UIPort:             *uiPort,
+		Name:               *gossiperName,
+		KnownPeers:         splitterAux,
+		Mode:               *gossiperMode,
+		Want:               wantList,
+		SavedMessages:      make(map[string][]RumorMessage),
+		TalkingPeers:       make(map[string]ConectionInfo),
+		AntiEntropyTimeout: *antiEntropyTimeout,
 	}
 }
 func antiEntropy(gossiper *Gossiper) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(time.Duration(gossiper.AntiEntropyTimeout) * time.Second)
 	for range ticker.C {
 		choseRandomPeerAndSendStatusPackage(gossiper)
 	}
@@ -504,8 +513,7 @@ func choseRandomPeerAndSendRumorPackage(message *RumorMessage, gossiper *Gossipe
 	packetToSend := &GossipPacket{Rumor: message}
 	packetBytes, _ := protobuf.Encode(packetToSend)
 	choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerToSendRumor)
-	gossiper.socket.conn.WriteToUDP(packetBytes, choosenPeerAddress)
-
+	gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
 	fmt.Println("MONGERING with " + peerToSendRumor)
 	return peerToSendRumor
 }
@@ -540,12 +548,16 @@ func timeoutChecker(gossiper *Gossiper) {
 	ticker := time.NewTicker(1 * time.Second)
 
 	for range ticker.C {
-		activePeers := gossiper.TalkingPeers
-		for key, activePeerAnalyzed := range activePeers {
+
+		for key, activePeerAnalyzed := range gossiper.TalkingPeers {
 			if activePeerAnalyzed.Timeout <= 0 {
 				delete(gossiper.TalkingPeers, key)
+			} else {
+				gossiper.TalkingPeers[key] = ConectionInfo{
+					MessageToGossip: gossiper.TalkingPeers[key].MessageToGossip,
+					Timeout:         gossiper.TalkingPeers[key].Timeout - 1,
+				}
 			}
-			activePeerAnalyzed.Timeout--
 		}
 	}
 
@@ -562,11 +574,15 @@ func main() {
 		go listenUISocketNotSimple(UIsocket, gossiper)
 	}
 	socket := gossiperSocketOpen(gossiper.Addr)
-	gossiper.socket = socket
+	gossiper.Socket = socket
 	if gossiper.Mode == true {
+		go listenAPISocket(gossiper)
 		listenSocket(socket, gossiper)
 	} else {
-		go antiEntropy(gossiper)
+		if gossiper.AntiEntropyTimeout != 0 {
+			go antiEntropy(gossiper)
+		}
+		go listenAPISocket(gossiper)
 		listenSocketNotSimple(socket, gossiper)
 
 	}
