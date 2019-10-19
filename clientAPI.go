@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	. "github.com/mecanicus/Peerster/types"
 )
@@ -27,13 +26,19 @@ func (gossiper *Gossiper) nodeHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(js)
 	}
 	if r.Method == "POST" {
-		buffer := make([]byte, 1024)
+		/*buffer := make([]byte, 2048)
 		n, _ := r.Body.Read(buffer)
 		s := string(buffer[:n])
 		peer := strings.Split(s, "=")[1]
 		fmt.Println(peer)
 		gossiper.KnownPeers = append(gossiper.KnownPeers, peer)
-
+		//Just to make Ajax happy
+		js, _ := json.Marshal("Saved")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)*/
+		peer := r.FormValue("nodeText")
+		//fmt.Println(peer)
+		gossiper.KnownPeers = append(gossiper.KnownPeers, peer)
 		//Just to make Ajax happy
 		js, _ := json.Marshal("Saved")
 		w.Header().Set("Content-Type", "application/json")
@@ -62,10 +67,11 @@ func (gossiper *Gossiper) messagesHandler(w http.ResponseWriter, r *http.Request
 		w.Write(js)
 	}
 	if r.Method == "POST" {
-		buffer := make([]byte, 1024)
-		n, _ := r.Body.Read(buffer)
-		s := string(buffer[:n])
-		messageText := strings.Split(s, "=")[1]
+		//buffer := make([]byte, 1024)
+		//n, _ := r.Body.Read(buffer)
+		//s := string(buffer[:n])
+		messageText := r.FormValue("messageText")
+		//messageText := strings.Split(s, "=")[1]
 
 		IDMessage := gossiper.Want[0].NextID
 		message := RumorMessage{

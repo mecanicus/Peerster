@@ -301,7 +301,10 @@ func printKnownPeers(gossiper *Gossiper) {
 			fmt.Println(peerAddress)
 			continue
 		}
-		fmt.Print(peerAddress + ",")
+		//Just in case we don´t have peers
+		if peerAddress != "" {
+			fmt.Print(peerAddress + ",")
+		}
 	}
 }
 func sendToPeersComingFromClientNotSimple(message *RumorMessage, gossiper *Gossiper) {
@@ -321,8 +324,10 @@ func sendToPeersComingFromPeer(message *SimpleMessage, gossiper *Gossiper) {
 				fmt.Println(peerAddress)
 				continue
 			}
-			fmt.Print(peerAddress + ",")
-			continue
+			if peerAddress != "" {
+				fmt.Print(peerAddress + ",")
+				continue
+			}
 		} else {
 
 			packetBytes, _ := protobuf.Encode(packetToSend)
@@ -454,7 +459,9 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 	}
 	fmt.Println("IN SYNC WITH " + senderAddress)
 	//Si hemos llegado aqui es porque tenemos todo en igualdad de condiciones a si que hay que tirar moneda
-	if (rand.Int() % 2) == 0 {
+
+	result := rand.Int()
+	if (result % 2) == 0 {
 		//Cerrar el objeto conexion con quien estamos hablando y abrir una nueva con el afortunado
 		senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
 
@@ -507,7 +514,7 @@ func antiEntropy(gossiper *Gossiper) {
 	}
 }
 func choseRandomPeerAndSendRumorPackage(message *RumorMessage, gossiper *Gossiper) string {
-	rand.Seed(time.Now().Unix())
+	//rand.Seed(time.Now().Unix())
 	randomIndexOfPeer := rand.Int() % len(gossiper.KnownPeers)
 	peerToSendRumor := gossiper.KnownPeers[randomIndexOfPeer]
 	packetToSend := &GossipPacket{Rumor: message}
@@ -518,7 +525,7 @@ func choseRandomPeerAndSendRumorPackage(message *RumorMessage, gossiper *Gossipe
 	return peerToSendRumor
 }
 func choseRandomPeerAndSendStatusPackage(gossiper *Gossiper) {
-	rand.Seed(time.Now().Unix())
+	//rand.Seed(time.Now().Unix())
 	randomIndexOfPeer := rand.Int() % len(gossiper.KnownPeers)
 	peerToSendStatus := gossiper.KnownPeers[randomIndexOfPeer]
 	addrPeerToSendStatus, _ := net.ResolveUDPAddr("udp4", peerToSendStatus)
@@ -565,7 +572,7 @@ func timeoutChecker(gossiper *Gossiper) {
 func main() {
 
 	gossiper := createNewGossiper(flagReader())
-
+	rand.Seed(time.Now().UTC().UnixNano())
 	UIsocket := gossiperUISocketOpen(gossiper.Addr, gossiper.UIPort)
 	if gossiper.Mode == true {
 		go listenUISocket(UIsocket, gossiper)

@@ -80,6 +80,7 @@ function addNode(){
         url: "http://localhost:8080/node",
     })
     .done(function( data, textStatus, jqXHR ) {
+		console.log(newNode)
         getNodesList()
     })
     .fail(function( jqXHR, textStatus, errorThrown ) {
