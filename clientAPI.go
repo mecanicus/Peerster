@@ -46,7 +46,35 @@ func (gossiper *Gossiper) nodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	}
 }
+func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		var origins []string
+		for origin := range gossiper.RoutingTable {
+			origins = append(origins, origin)
+		}
+		js, _ := json.Marshal(origins)
 
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+	if r.Method == "POST" {
+		privateMessageText := r.FormValue("privateMessageString")
+		selectedOrigin := r.FormValue("selectedOrigin")
+		pointerSelectedOrigin := &selectedOrigin
+		privateMessage := &PrivateMessage{
+			Origin:      gossiper.Name,
+			ID:          0,
+			Text:        privateMessageText,
+			Destination: *pointerSelectedOrigin,
+			HopLimit:    10,
+		}
+		sendPrivateMessage(privateMessage, gossiper)
+		js, _ := json.Marshal("Saved")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+}
 func (gossiper *Gossiper) messagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "GET" {
@@ -54,10 +82,12 @@ func (gossiper *Gossiper) messagesHandler(w http.ResponseWriter, r *http.Request
 		for peerName, messagesListPeer := range gossiper.SavedMessages {
 
 			for _, message := range messagesListPeer {
-				stringToSend := "<strong>Peer Name: </strong>" + peerName
-				stringToSend += "<strong> ID: </strong>" + fmt.Sprint(message.ID) + "<strong> Text: </strong>" + message.Text + " "
-				messages = append(messages, stringToSend)
-
+				//To avoid showing the user route messages
+				if message.Text != "" {
+					stringToSend := "<strong>Peer Name: </strong>" + peerName
+					stringToSend += "<strong> ID: </strong>" + fmt.Sprint(message.ID) + "<strong> Text: </strong>" + message.Text + " "
+					messages = append(messages, stringToSend)
+				}
 			}
 
 		}
@@ -101,6 +131,7 @@ func listenAPISocket(gossiper *Gossiper) {
 	http.HandleFunc("/id", gossiper.gossiperIDHandler)
 	http.HandleFunc("/messages", gossiper.messagesHandler)
 	http.HandleFunc("/node", gossiper.nodeHandler)
+	http.HandleFunc("/privateMessage", gossiper.privateMessagesHandler)
 	http.ListenAndServe(":8080", nil)
 
 }
