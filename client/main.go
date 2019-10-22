@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -49,13 +50,17 @@ func main() {
 		}
 		//File request message
 	} else if *request != "" {
-		requestBytes := []byte(*request)
+		//fmt.Println(*request)
+		requestBytes, _ := hex.DecodeString(*request)
+		//fmt.Printf("%x\n", requestBytes)
 		message = &Message{
 			Text:        *msg,
 			Destination: dest,
 			File:        filePath,
 			Request:     &requestBytes,
 		}
+		fmt.Printf("%x\n", requestBytes)
+		//fmt.Println(string(*message.Request))
 		//Share file
 	} else if *filePath != "" {
 		message = &Message{
@@ -68,6 +73,7 @@ func main() {
 		}
 	}
 	packetToSend := message
+	//fmt.Println(*packetToSend.Request)
 	packetBytes, _ := protobuf.Encode(packetToSend)
 	conn, err := net.Dial("udp", ip)
 	_, err = conn.Write(packetBytes)

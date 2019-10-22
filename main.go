@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -32,7 +33,7 @@ type Gossiper struct {
 	TalkingPeers         map[string]ConectionInfo
 	RoutingTable         map[string]string
 	StoredFiles          map[string]FileInfo     //The key is the file name
-	FilesBeingDownloaded map[string]DownloadInfo //The key is the owner´s name of the file
+	FilesBeingDownloaded map[string]DownloadInfo //The key is the desired name of the file
 	Socket               *GossiperSocket
 	Rtimer               int
 	AntiEntropyTimeout   int
@@ -238,15 +239,26 @@ func connectionCreationRumorMessage(sender string, message *RumorMessage, gossip
 	gossiper.TalkingPeers = talkingPeersMap
 }
 func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
+	//fmt.Printf("%+v\n", message)
 	hashFileRequested := message.HashValue
+	//fmt.Println(hex.EncodeToString(message.HashValue))
 	dataReplyToSend := &DataReply{}
 	//We are going to check all the hashes to see if we have it.
 	//Another possibility would be open a sesion when metahash is requested and therefore knowing that later he would ask for chunks of that file
 	for _, storedFile := range gossiper.StoredFiles {
-
+		//fmt.Println("EMPEZAMOOOOOOOOOOOOOS")
 		//Metafile is being requested
 		storedMetahash := storedFile.MetaHash[:]
+		//fmt.Println(string(storedMetahash))
+		//fmt.Printf("%x\n", storedFile.MetaHash)
+		//fmt.Println(hex.EncodeToString(storedMetahash))
+		//fmt.Println("------------------------------")
+		//fmt.Println(hex.EncodeToString(message.HashValue))
+		//fmt.Println(string(hashFileRequested))
+		//fmt.Printf("%x\n", hashFileRequested)
+		//fmt.Println(hashFileRequested)
 		if bytes.Equal(storedMetahash, hashFileRequested) {
+			fmt.Println("CCCCCCCCCCCCCCCCCCCCCC")
 			file, err := os.Open(storedFile.Metafile)
 			if err != nil {
 				log.Fatal(err)
@@ -261,6 +273,7 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 				HashValue:   hashFileRequested,
 				Data:        metahashbytes,
 			}
+			fmt.Printf("%+v\n", dataReplyToSend)
 			break
 		}
 		for index, hashOfChunk := range storedFile.HashesOfChunks {
@@ -532,7 +545,10 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		HashValue:   *packet.Request,
 		HopLimit:    10,
 	}
-
+	fmt.Println("--------------------------")
+	fmt.Println(hex.EncodeToString(*packet.Request))
+	fmt.Println(*packet.Request)
+	fmt.Printf("%+v\n", message)
 	message.HopLimit = message.HopLimit - 1
 	//If the hop limit has been exceeded
 	if message.HopLimit <= 0 {
@@ -546,7 +562,7 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		Timeout:           5,
 		LastHashRequested: message.HashValue,
 	}
-
+	//fmt.Println(string(gossiper.FilesBeingDownloaded[message.Destination].MetaHash))
 	//If not send to next hop
 	nextHop := gossiper.RoutingTable[message.Destination]
 	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
@@ -587,13 +603,14 @@ func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
 		//Request file
 
 		if packet.File != nil && packet.Destination != nil {
+
 			fileDownloadRequest(packet, gossiper)
 			continue
 		}
 		//Share file
 		if packet.File != nil {
-
-			fileIndexing(packet, gossiper)
+			fileToBeChunked := *packet.File
+			fileIndexing(fileToBeChunked, gossiper)
 			continue
 		}
 
@@ -636,8 +653,8 @@ func checkPeersListSimple(relayAddress string, gossiper *Gossiper) bool {
 	}
 	return false
 }
-func fileIndexing(packet *Message, gossiper *Gossiper) {
-	fileToBeChunked := *packet.File
+func fileIndexing(fileToBeChunked string, gossiper *Gossiper) {
+	//fileToBeChunked := *packet.File
 	var hashesOfChunks [][32]byte
 	//pwd, _ := os.Getwd()
 	//fmt.Println(pwd)
@@ -669,7 +686,7 @@ func fileIndexing(packet *Message, gossiper *Gossiper) {
 		file.Read(partBuffer)
 		hashesOfChunks = append(hashesOfChunks, sha256.Sum256(partBuffer))
 
-		fileName := *packet.File + "_" + strconv.FormatUint(i, 10)
+		fileName := fileToBeChunked + "_" + strconv.FormatUint(i, 10)
 		//_, err := os.Create(fileName)
 
 		if err != nil {
@@ -722,6 +739,7 @@ func calculateMetaHash(filePath string, hashesOfChunks [][32]byte, fileSize int6
 	}
 	gossiper.StoredFiles[filePathMetaHash] = fileToStore
 	//fmt.Printf("%+v\n", fileToStore)
+	//fmt.Printf("%x\n", fileToStore.MetaHash)
 	return nil
 }
 func packetType(packet GossipPacket) int {
@@ -1126,6 +1144,22 @@ func timeoutChecker(gossiper *Gossiper) {
 	}
 
 }
+func timeOutOfDownload(gossiper *Gossiper) {
+	ticker := time.NewTicker(1 * time.Second)
+	for range ticker.C {
+
+		for key, fileDownload := range gossiper.FilesBeingDownloaded {
+			if fileDownload.Timeout <= 0 {
+				//TODO: Repeat the request again
+				//delete(gossiper.FilesBeingDownloaded, key)
+			} else {
+				gossiper.FilesBeingDownloaded[key] = DownloadInfo{
+					Timeout: gossiper.FilesBeingDownloaded[key].Timeout - 1,
+				}
+			}
+		}
+	}
+}
 func main() {
 
 	gossiper := createNewGossiper(flagReader())
@@ -1147,6 +1181,8 @@ func main() {
 			go antiEntropy(gossiper)
 		}
 		go setRtimer(gossiper)
+		//TODO: Descomentar
+		//go timeOutOfDownload(gossiper *Gossiper) {
 		go listenAPISocket(gossiper)
 		listenSocketNotSimple(socket, gossiper)
 

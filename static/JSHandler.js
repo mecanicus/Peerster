@@ -1,3 +1,52 @@
+function uploadFile(){
+    var input = document.createElement('input');
+    input.type = 'file';
+
+        input.onchange = e => { 
+
+        // getting a hold of the file reference
+        var file = e.target.files[0];
+        var fileName = file.name
+        sendFile(fileName)
+        // setting up the reader
+        //var reader = new FileReader();
+        //reader.readAsText(file,'UTF-8');
+
+        // here we tell the reader what to do when it's done reading...
+        //reader.onload = readerEvent => {
+        //    var content = readerEvent.target.result; // this is the content!
+        //    sendFile(content)
+        //    console.log(fileName);
+        //}
+
+    }
+    input.click();
+}
+function sendFile(fileName){
+    console.log(fileName)
+    $.ajax({
+        data: {"fileName":fileName },
+        type: "POST",
+        dataType: "json",
+        url: "http://localhost:8080/fileUpload",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+		//console.log(selectedNode)
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
+    });
+}
+
+function uploadFile2(elemId) {
+    var elem = document.getElementById(elemId);
+    if(elem && document.createEvent) {
+       var evt = document.createEvent("MouseEvents");
+       evt.initEvent("click", true, false);
+       elem.dispatchEvent(evt);
+    }
+ }
+
 $(document).ready(function() {
     $("#selectOrigin").on("change", function() {
         console.log($(this).val())

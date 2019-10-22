@@ -75,6 +75,18 @@ func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.
 		w.Write(js)
 	}
 }
+func (gossiper *Gossiper) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		fileName := r.FormValue("fileName")
+		fmt.Println(fileName)
+		fileIndexing(fileName, gossiper)
+		js, _ := json.Marshal("Saved")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+
+	}
+}
 func (gossiper *Gossiper) messagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "GET" {
@@ -132,6 +144,8 @@ func listenAPISocket(gossiper *Gossiper) {
 	http.HandleFunc("/messages", gossiper.messagesHandler)
 	http.HandleFunc("/node", gossiper.nodeHandler)
 	http.HandleFunc("/privateMessage", gossiper.privateMessagesHandler)
+	http.HandleFunc("/fileUpload", gossiper.filesUploadHandler)
+
 	http.ListenAndServe(":8080", nil)
 
 }
