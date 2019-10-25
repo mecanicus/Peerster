@@ -59,7 +59,7 @@ func main() {
 			File:        filePath,
 			Request:     &requestBytes,
 		}
-		fmt.Printf("%x\n", requestBytes)
+		//fmt.Println(hex.EncodeToString(requestBytes))
 		//fmt.Println(string(*message.Request))
 		//Share file
 	} else if *filePath != "" {

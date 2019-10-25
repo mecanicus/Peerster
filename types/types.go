@@ -21,19 +21,23 @@ type Message struct {
 }
 type FileInfo struct {
 	FileSize       int64
-	Metafile       string
+	Metafile       []byte
 	MetaHash       [32]byte
-	HashesOfChunks [][32]byte
-	FilePathChunks string
+	HashesOfChunks map[[32]byte][]byte
 }
 type DownloadInfo struct {
-	MetaHashObtained  bool
-	MetaHash          []byte
-	PathToSave        string
-	Timeout           int
-	Metafile          string
-	LastHashRequested []byte
-	HashesOfChunks    [][]byte
+	PathToSave        string        //Where to save it
+	FileName          string        //Name of the file to save it to
+	Timeout           int           //Timeout to repeat the request
+	Metafile          []byte        //The entire metafile
+	MetaHash          []byte        //Hash of the metafile
+	LastHashRequested []byte        //Last hash that has been requested
+	ChunkInformation  []ChunkStruct //Where all the chunk's info is stored (hashes/data)
+	Destination       string        //Used in case of failed download to know who to repeat the request
+}
+type ChunkStruct struct {
+	ChunkHash []byte
+	ChunkData []byte
 }
 type DataRequest struct {
 	Origin      string

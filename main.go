@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -32,8 +31,8 @@ type Gossiper struct {
 	SavedMessages        map[string][]RumorMessage
 	TalkingPeers         map[string]ConectionInfo
 	RoutingTable         map[string]string
-	StoredFiles          map[string]FileInfo     //The key is the file name
-	FilesBeingDownloaded map[string]DownloadInfo //The key is the desired name of the file
+	StoredFiles          map[string]*FileInfo //The key is the file name
+	FilesBeingDownloaded []*DownloadInfo
 	Socket               *GossiperSocket
 	Rtimer               int
 	AntiEntropyTimeout   int
@@ -128,12 +127,13 @@ func listenUISocket(UISocket *GossiperSocket, gossiper *Gossiper) {
 	}
 }
 func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
-	buf := make([]byte, 2000)
+	buf := make([]byte, 8300)
 	for {
 		_, sender, err := socket.Conn.ReadFromUDP(buf)
 		if err != nil {
 			panic(err)
 		}
+
 		// Do stuff with the read bytes
 		packet := &GossipPacket{}
 		protobuf.Decode(buf, packet)
@@ -222,6 +222,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 			fileDataRequestManagement(message, gossiper)
 
 		case FileReply:
+			fmt.Println("OLAOLAOALOLA")
 			message := packet.DataReply
 			fileDataReplyManagement(message, gossiper)
 		}
@@ -244,7 +245,6 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 	//fmt.Println(hex.EncodeToString(message.HashValue))
 	dataReplyToSend := &DataReply{}
 	//We are going to check all the hashes to see if we have it.
-	//Another possibility would be open a sesion when metahash is requested and therefore knowing that later he would ask for chunks of that file
 	for _, storedFile := range gossiper.StoredFiles {
 		//fmt.Println("EMPEZAMOOOOOOOOOOOOOS")
 		//Metafile is being requested
@@ -258,44 +258,30 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 		//fmt.Printf("%x\n", hashFileRequested)
 		//fmt.Println(hashFileRequested)
 		if bytes.Equal(storedMetahash, hashFileRequested) {
-			fmt.Println("CCCCCCCCCCCCCCCCCCCCCC")
-			file, err := os.Open(storedFile.Metafile)
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer file.Close()
-			metahashbytes, err := ioutil.ReadAll(file)
-			//TODO: Send metahashbytes back
+			//fmt.Println("CCCCCCCCCCCCCCCCCCCCCC")
+			fmt.Println("Enviando metafile: ", sha256.Sum256(storedFile.Metafile))
 			dataReplyToSend = &DataReply{
 				Origin:      gossiper.Name,
 				Destination: message.Origin,
 				HopLimit:    10,
-				HashValue:   hashFileRequested,
-				Data:        metahashbytes,
+				HashValue:   storedMetahash,
+				Data:        storedFile.Metafile,
 			}
 			fmt.Printf("%+v\n", dataReplyToSend)
 			break
 		}
-		for index, hashOfChunk := range storedFile.HashesOfChunks {
-			//One chunk is being requested
-			hashOfChunkAux := hashOfChunk[:]
+		//One chunk is being requested
+		for hashOfTheChunk, dataOfTheChunk := range storedFile.HashesOfChunks {
+			hashOfChunkAux := hashOfTheChunk[:]
 			if bytes.Equal(hashOfChunkAux, hashFileRequested) {
-				//Now we look for the file knowing the index of the chunk
-				selectedChuckPath := storedFile.FilePathChunks + "_" + strconv.FormatUint(uint64(index), 10)
-				file, err := os.Open(selectedChuckPath)
-				if err != nil {
-					log.Fatal(err)
-				}
-				defer file.Close()
-				chunkBytes, err := ioutil.ReadAll(file)
+				fmt.Println("Enviando chunk: ", sha256.Sum256(dataOfTheChunk))
 				dataReplyToSend = &DataReply{
 					Origin:      gossiper.Name,
 					Destination: message.Origin,
 					HopLimit:    10,
-					HashValue:   hashFileRequested,
-					Data:        chunkBytes,
+					HashValue:   hashOfChunkAux,
+					Data:        dataOfTheChunk,
 				}
-
 				break
 			}
 		}
@@ -341,6 +327,11 @@ func sendDataRequest(message *DataRequest, gossiper *Gossiper) {
 		panic(err)
 	}
 	gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
+	/*if len(gossiper.FilesBeingDownloaded) > 0 {
+		for i := 0; i < len(gossiper.FilesBeingDownloaded[0].ChunkInformation); i++ {
+			fmt.Println("cada saliente: ", sha256.Sum256(gossiper.FilesBeingDownloaded[0].ChunkInformation[i].ChunkData))
+		}
+	}*/
 }
 func fileDataReplyManagement(message *DataReply, gossiper *Gossiper) {
 
@@ -372,169 +363,198 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	origin := message.Origin
 	sha256fDataAux := sha256.Sum256(message.Data)
 	sha256fData := sha256fDataAux[:]
-	session := gossiper.FilesBeingDownloaded[origin]
+	//Find the session
+	var session *DownloadInfo
+	var index int
+	for oneIndex, oneSession := range gossiper.FilesBeingDownloaded {
+		if bytes.Equal(oneSession.LastHashRequested, message.HashValue) {
+			session = oneSession
+			index = oneIndex
+			break
+		}
+	}
 	sha256Expected := session.LastHashRequested
 	//Check if the file has being received correctly or is not the one we are looking for
 	if !bytes.Equal(sha256fData, sha256Expected) {
+
 		//TODO: Do something if not
 		return
 	} else {
 		//Check if the received hash is of the metahash
 		//If it is the metahash
-		if bytes.Equal(sha256Expected, session.MetaHash) && session.MetaHashObtained == false {
-			session.MetaHashObtained = true
-
-			//Save file to filesystem
-			filePathMetaHash := session.PathToSave + "_metahash"
-			f, err := os.Create(filePathMetaHash)
-			if err != nil {
-				panic(err)
-			}
-			defer f.Close()
-			f.Write(message.Data)
-			f.Sync()
-
+		if bytes.Equal(sha256fData, session.MetaHash) {
 			//Save the info also to the gossiper struct
 			stringListOfHashes := string(message.Data)
 			listOfHashes := strings.Split(stringListOfHashes, ",")
-			var listOfHashesToSave [][]byte
+			//We have they keys of the map (hashes) but not the values
+			var chunk ChunkStruct
 			for _, hashString := range listOfHashes {
-				listOfHashesToSave = append(listOfHashesToSave, []byte(hashString))
+				chunk.ChunkHash, _ = hex.DecodeString(hashString)
+				session.ChunkInformation = append(session.ChunkInformation, chunk)
 			}
-			session.HashesOfChunks = listOfHashesToSave
-			session.Metafile = filePathMetaHash
+			//fmt.Printf("%+v\n", session.ChunkInformation)
+			fmt.Println("Recibiendo metafile: ", sha256.Sum256(message.Data))
 			//We are going to ask for the first chunk
-			session.LastHashRequested = listOfHashesToSave[0]
-			gossiper.FilesBeingDownloaded[message.Destination] = DownloadInfo{
-				MetaHash:          session.MetaHash,
-				MetaHashObtained:  session.MetaHashObtained,
+			//session.LastHashRequested = session.ChunkInformation[0].ChunkHash
+			gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 				PathToSave:        session.PathToSave,
+				FileName:          session.FileName,
 				Timeout:           5,
-				LastHashRequested: session.LastHashRequested,
-				HashesOfChunks:    session.HashesOfChunks,
-				Metafile:          session.Metafile,
+				Metafile:          message.Data,
+				MetaHash:          session.MetaHash,
+				LastHashRequested: session.ChunkInformation[0].ChunkHash,
+				ChunkInformation:  session.ChunkInformation,
 			}
 			dataRequest := &DataRequest{
 				Destination: origin,
 				HopLimit:    10,
 				Origin:      gossiper.Name,
-				HashValue:   session.LastHashRequested,
+				HashValue:   session.ChunkInformation[0].ChunkHash,
 			}
-			sendDataRequest(dataRequest, gossiper)
 			//TODO: Update available files
-
+			var metaHashAux [32]byte
+			copy(metaHashAux[:], session.MetaHash)
+			fileToStore := &FileInfo{
+				MetaHash:       metaHashAux,
+				Metafile:       message.Data,
+				HashesOfChunks: make(map[[32]byte][]byte),
+			}
+			gossiper.StoredFiles[session.FileName] = fileToStore
+			sendDataRequest(dataRequest, gossiper)
 			//Is the hash of a chunk of the file
 		} else {
-			//Save file to filesystem
-			var hashNumber int
-			for index, v := range session.HashesOfChunks {
-				if bytes.Equal(v, sha256fData) {
-					hashNumber = index
+			//copy(Aux, message.Data)
+			//message.Data = []byte("0")
+			var positionLastChunkReceived int
+			//fmt.Println(len(session.ChunkInformation))
+			//fmt.Println("Recibiendo chunk: ", &message, sha256.Sum256(Aux), sha256.Sum256(message.Data), message.Data[:10])
+			//fmt.Println("------------------------")
+			//TODO: EL PROBLEMA ESTA AQUI, NO SE COMO COJONES ESTA CAMBIANDO EL VALOR DE session.ChunkInformation[i].ChunkData CON EL MENSAJE ENTRANTE ANTES DE EJECUTAR LAS SIGUIENTES LINEAS
+			for i := 0; i < len(session.ChunkInformation); i++ {
+				fmt.Println("before: ", sha256.Sum256(session.ChunkInformation[i].ChunkData))
+				//fmt.Println("memoria: ", &session.ChunkInformation[i])
+			}
+			for index2, oneChunk := range session.ChunkInformation {
+				//If check to which chunk we are receiving the data
+				if bytes.Equal(oneChunk.ChunkHash, sha256fData) {
+					//oneChunk.ChunkData = message.Data
+					fmt.Println("chunk analyzed", index2)
+
+					session.ChunkInformation[index2].ChunkData = message.Data
+					//copy(session.ChunkInformation[index2].ChunkData, message.Data)
+
+					//session.ChunkInformation = append(session.ChunkInformation, oneChunk)
+					positionLastChunkReceived = index2
+					fmt.Println("Guardando recibido chunk: ", sha256.Sum256(session.ChunkInformation[index2].ChunkData))
 					break
 				}
 			}
-			filePathEachChunk := session.PathToSave + "_" + string(hashNumber)
-			f, err := os.Create(filePathEachChunk)
-			if err != nil {
-				panic(err)
+			for i := 0; i < len(session.ChunkInformation); i++ {
+				fmt.Println("after: ", sha256.Sum256(session.ChunkInformation[i].ChunkData))
 			}
-			defer f.Close()
-			f.Write(message.Data)
-			f.Sync()
+
+			//Have to save the last info in case is the last chunk
+			//fmt.Println(reflect.DeepEqual(session, gossiper.FilesBeingDownloaded[index]))
+			gossiper.FilesBeingDownloaded[index] = session
+			//TODO: El problema esta por aqui, sospecho que me estoy saliendo de la posicion del array
+			fmt.Println("Index", index)
+			fmt.Println("positionLastChunkReceived", positionLastChunkReceived)
+			fmt.Println("len chunck info", len(session.ChunkInformation))
+			//fmt.Println("Antes del if: ", sha256.Sum256(gossiper.FilesBeingDownloaded[index].ChunkInformation[0].ChunkData))
+
 			//Check if we have files left to download
 			//If we do
-			if len(session.HashesOfChunks) > hashNumber {
+			if (positionLastChunkReceived+1 < len(session.ChunkInformation)) && (session.ChunkInformation[positionLastChunkReceived+1].ChunkData) == nil {
 				//Request next chunk
-				gossiper.FilesBeingDownloaded[message.Destination] = DownloadInfo{
-					MetaHash:          session.MetaHash,
-					MetaHashObtained:  session.MetaHashObtained,
+				gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 					PathToSave:        session.PathToSave,
+					FileName:          session.FileName,
 					Timeout:           5,
-					LastHashRequested: session.HashesOfChunks[hashNumber+1],
-					HashesOfChunks:    session.HashesOfChunks,
 					Metafile:          session.Metafile,
+					MetaHash:          session.MetaHash,
+					LastHashRequested: session.ChunkInformation[positionLastChunkReceived+1].ChunkHash,
+					ChunkInformation:  session.ChunkInformation,
 				}
+				//TODO: Creo que hasta aqui va perfecto
+				//fmt.Println("Guardando recibido chunk en session: ", sha256.Sum256(session.ChunkInformation[5].ChunkData))
+				//fmt.Println("Guardando recibido chunk en memoria final: ", sha256.Sum256(gossiper.FilesBeingDownloaded[index].ChunkInformation[5].ChunkData))
+
 				//TODO: Send another request
 				dataRequest := &DataRequest{
 					Destination: origin,
 					HopLimit:    10,
 					Origin:      gossiper.Name,
-					HashValue:   session.HashesOfChunks[hashNumber+1],
+					HashValue:   session.ChunkInformation[positionLastChunkReceived+1].ChunkHash,
 				}
-				sendDataRequest(dataRequest, gossiper)
-
+				/*for i := 0; i < len(session.ChunkInformation); i++ {
+					fmt.Println("despues2: ", sha256.Sum256(session.ChunkInformation[i].ChunkData))
+				}
+				for i := 0; i < len(gossiper.FilesBeingDownloaded[index].ChunkInformation); i++ {
+					fmt.Println("despues3 internal: ", sha256.Sum256(gossiper.FilesBeingDownloaded[index].ChunkInformation[i].ChunkData))
+				}*/
 				//TODO: Update available files
-				var metaHashAux [32]byte
-				var hashesOfChunksAux [][32]byte
-				var hashesOfChunksAux2 [32]byte
-				copy(metaHashAux[:], session.MetaHash)
-				for i := 0; i < len(session.HashesOfChunks); i++ {
-					copy(hashesOfChunksAux2[:], session.HashesOfChunks[i])
-					hashesOfChunksAux = append(hashesOfChunksAux, hashesOfChunksAux2)
-				}
-				fileToStore := FileInfo{
-					FileSize:       0,
-					MetaHash:       metaHashAux,
-					Metafile:       session.Metafile,
-					HashesOfChunks: hashesOfChunksAux,
-					FilePathChunks: session.PathToSave,
-				}
-				gossiper.StoredFiles[session.Metafile] = fileToStore
+				var metaChunkAux [32]byte
+				copy(metaChunkAux[:], message.HashValue)
+
+				gossiper.StoredFiles[session.FileName].HashesOfChunks[metaChunkAux] = message.Data
+				sendDataRequest(dataRequest, gossiper)
 			} else {
 				//TODO: File downloaded, joint parts and close session
-				fileDownloadedSuccessfully(message, gossiper)
+				fmt.Println("AAAAAAAAAAAAAAAAAAAAAADDDDDDDDDDDDAAAA")
+				fileDownloadedSuccessfully(index, message, gossiper)
 			}
 		}
 
 	}
 }
-func fileDownloadedSuccessfully(message *DataReply, gossiper *Gossiper) {
-	origin := message.Origin
-	session := gossiper.FilesBeingDownloaded[origin]
-	pathToSaveFinalFile := session.PathToSave
-	//TODO: Join the parts
-	f, err := os.OpenFile(pathToSaveFinalFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-	for i := 0; i < len(session.HashesOfChunks); i++ {
-		pathToChuckFile := session.PathToSave + "_" + string(i)
-		file, err := os.Open(pathToChuckFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer file.Close()
-		bytesOfTheChunk, err := ioutil.ReadAll(file)
+func fileDownloadedSuccessfully(index int, message *DataReply, gossiper *Gossiper) {
+	session := gossiper.FilesBeingDownloaded[index]
 
-		//Write back to the file
-		if _, err := f.Write(bytesOfTheChunk); err != nil {
-			log.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			log.Fatal(err)
-		}
+	fmt.Println("Guardando recibido chunk en memoria final sucessfully: ", sha256.Sum256(gossiper.FilesBeingDownloaded[index].ChunkInformation[5].ChunkData))
+
+	//var hashValue32 [32]byte
+	//copy(hashValue32[:], message.HashValue)
+	pathToSaveFinalFile := session.PathToSave
+	var finalFile []byte
+	//TODO: Join the parts
+	//finalFile, err := os.OpenFile(pathToSaveFinalFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	//TODO: AQUI YA ESTA MAL Y SE REPITE
+	for i := 0; i < len(session.ChunkInformation); i++ {
+		//Join all the data from the chunks and save it to finalFile
+		//fmt.Printf("%x\n", session.ChunkInformation[i])
+		fmt.Println("Guardando recibido chunk en internal: ", sha256.Sum256(session.ChunkInformation[i].ChunkData))
+		chunkData2 := session.ChunkInformation[i].ChunkData
+		finalFile = append(finalFile, chunkData2...)
 	}
-	fileInfo, _ := f.Stat()
+	//Save file in filesystem
+	ioutil.WriteFile(pathToSaveFinalFile, finalFile, 0644)
+	//TODO: Revisar si se puede coger el tamaño de archivo con len del array
+	//fileInfoAux, _ := file.Stat()
+
 	//Update available files
 	var metaHashAux [32]byte
-	var hashesOfChunksAux [][32]byte
-	var hashesOfChunksAux2 [32]byte
 	copy(metaHashAux[:], session.MetaHash)
-	for i := 0; i < len(session.HashesOfChunks); i++ {
-		copy(hashesOfChunksAux2[:], session.HashesOfChunks[i])
-		hashesOfChunksAux = append(hashesOfChunksAux, hashesOfChunksAux2)
-	}
-	fileToStore := FileInfo{
-		FileSize:       fileInfo.Size(),
+	fileToStore := &FileInfo{
+		FileSize:       int64(len(finalFile)),
 		MetaHash:       metaHashAux,
 		Metafile:       session.Metafile,
-		HashesOfChunks: hashesOfChunksAux,
-		FilePathChunks: pathToSaveFinalFile,
+		HashesOfChunks: make(map[[32]byte][]byte),
 	}
-	gossiper.StoredFiles[session.Metafile] = fileToStore
+
+	gossiper.StoredFiles[session.FileName] = fileToStore
+
+	var chunkHashAux [32]byte
+	for i := 0; i < len(session.ChunkInformation); i++ {
+		chunkHash := session.ChunkInformation[i].ChunkHash
+		chunkData := session.ChunkInformation[i].ChunkData
+		copy(chunkHashAux[:], chunkHash)
+		gossiper.StoredFiles[session.FileName].HashesOfChunks[chunkHashAux] = chunkData
+	}
+	//gossiper.StoredFiles[session.Metafile] = fileToStore
 
 	//Close session
-	delete(gossiper.FilesBeingDownloaded, origin)
+	gossiper.FilesBeingDownloaded[index] = gossiper.FilesBeingDownloaded[len(gossiper.FilesBeingDownloaded)-1]
 
 }
 func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
@@ -555,13 +575,15 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		return
 	}
 	//Open sesion of download
-	gossiper.FilesBeingDownloaded[message.Destination] = DownloadInfo{
-		MetaHash:          message.HashValue,
-		MetaHashObtained:  false,
+	//var hashValue32 [32]byte
+	//copy(hashValue32[:], message.HashValue)
+	gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded, &DownloadInfo{
+		FileName:          *packet.File,
 		PathToSave:        filepath.Join(Downloads, *packet.File),
 		Timeout:           5,
 		LastHashRequested: message.HashValue,
-	}
+		MetaHash:          message.HashValue,
+	})
 	//fmt.Println(string(gossiper.FilesBeingDownloaded[message.Destination].MetaHash))
 	//If not send to next hop
 	nextHop := gossiper.RoutingTable[message.Destination]
@@ -600,8 +622,8 @@ func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
 		}
 		packet := &Message{}
 		protobuf.Decode(buf, packet)
-		//Request file
 
+		//Request file
 		if packet.File != nil && packet.Destination != nil {
 
 			fileDownloadRequest(packet, gossiper)
@@ -659,8 +681,8 @@ func fileIndexing(fileToBeChunked string, gossiper *Gossiper) {
 	//pwd, _ := os.Getwd()
 	//fmt.Println(pwd)
 	file, err := os.Open(filepath.Join(SharedFiles, fileToBeChunked))
-	pathToStore := filepath.Join(SharedFiles, strings.Split(fileToBeChunked, ".")[0])
-	os.Mkdir("."+string(filepath.Separator)+pathToStore, 0777)
+	//pathToStore := filepath.Join(SharedFiles, strings.Split(fileToBeChunked, ".")[0])
+	//os.Mkdir("."+string(filepath.Separator)+pathToStore, 0777)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -671,75 +693,61 @@ func fileIndexing(fileToBeChunked string, gossiper *Gossiper) {
 	var fileSize int64 = fileInfo.Size()
 	//8 KB of chunk sice
 	const fileChunk = 1 * (1 << 13)
+	//const fileChunk = 1 * (1 << 12)
 
 	// calculate total number of parts the file will be chunked into
-
 	totalPartsNum := uint64(math.Ceil(float64(fileSize) / float64(fileChunk)))
 
 	fmt.Printf("Splitting to %d pieces.\n", totalPartsNum)
-
+	//Save the size of the original file
+	gossiper.StoredFiles[fileToBeChunked] = &FileInfo{}
+	gossiper.StoredFiles[fileToBeChunked].HashesOfChunks = make(map[[32]byte][]byte)
+	gossiper.StoredFiles[fileToBeChunked].FileSize = fileSize
 	for i := uint64(0); i < totalPartsNum; i++ {
 
 		partSize := int(math.Min(fileChunk, float64(fileSize-int64(i*fileChunk))))
 		partBuffer := make([]byte, partSize)
 		//Read the chunk
 		file.Read(partBuffer)
-		hashesOfChunks = append(hashesOfChunks, sha256.Sum256(partBuffer))
 
-		fileName := fileToBeChunked + "_" + strconv.FormatUint(i, 10)
+		//fileName := fileToBeChunked + "_" + strconv.FormatUint(i, 10)
 		//_, err := os.Create(fileName)
 
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		// write/save buffer to disk
-		ioutil.WriteFile(filepath.Join(pathToStore, fileName), partBuffer, os.ModeAppend)
+		fmt.Println("Guardando: ", sha256.Sum256(partBuffer))
+		//We create a new stored file with key the name of the file and then fill the map of hashed
+
+		gossiper.StoredFiles[fileToBeChunked].HashesOfChunks[sha256.Sum256(partBuffer)] = partBuffer
+
+		//Also store the hash in an array to calculate the metahash without the need of looking at the dictionary of hashes
+		hashesOfChunks = append(hashesOfChunks, sha256.Sum256(partBuffer))
+
 	}
-	calculateMetaHash(filepath.Join(pathToStore, fileToBeChunked), hashesOfChunks, fileSize, gossiper)
+	calculateMetaHash(fileToBeChunked, hashesOfChunks, fileSize, gossiper)
 
 }
-func calculateMetaHash(filePath string, hashesOfChunks [][32]byte, fileSize int64, gossiper *Gossiper) error {
-	fileCommonBase := filePath
-	filePathMetaHash := fileCommonBase + "_metahash"
-	f, err := os.Create(filePathMetaHash)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func calculateMetaHash(fileToBeChunked string, hashesOfChunks [][32]byte, fileSize int64, gossiper *Gossiper) error {
+
+	//filePathMetaHash := fileCommonBase + "_metahash"
+	//f, err := os.Create(filePathMetaHash)
+
+	//defer f.Close()
 	var hashesOfChunksString []string
-	for hashOfChunk := range hashesOfChunks {
-		hashesOfChunksString = append(hashesOfChunksString, string(hashOfChunk))
+
+	//Here we create the content of the metafile
+	for _, hashOfChunk := range hashesOfChunks {
+		hashesOfChunksString = append(hashesOfChunksString, hex.EncodeToString(hashOfChunk[:]))
 	}
 	dataOfMetaHash := strings.Join(hashesOfChunksString, ",")
-	f.Write([]byte(dataOfMetaHash))
-	f.Sync()
-	/*rv := reflect.ValueOf(hashesOfChunks)
-	if rv.Kind() != reflect.Slice {
-		return errors.New("Not a slice")
-	}
-	for i := 0; i < rv.Len(); i++ {
-		fmt.Fprintln(f, rv.Index(i).Interface())
-	}*/
-	//Now calculate the metahash
-	file, err := os.Open(filePathMetaHash)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-	metahashbytes, err := ioutil.ReadAll(file)
-	metaHash := sha256.Sum256(metahashbytes)
-	fmt.Printf("%x\n", metaHash)
-	fileToStore := FileInfo{
-		FileSize:       fileSize,
-		MetaHash:       metaHash,
-		Metafile:       filePathMetaHash,
-		HashesOfChunks: hashesOfChunks,
-		FilePathChunks: fileCommonBase,
-	}
-	gossiper.StoredFiles[filePathMetaHash] = fileToStore
-	//fmt.Printf("%+v\n", fileToStore)
-	//fmt.Printf("%x\n", fileToStore.MetaHash)
+	dataOfMetahashBytes := []byte(dataOfMetaHash)
+	gossiper.StoredFiles[fileToBeChunked].Metafile = dataOfMetahashBytes
+	gossiper.StoredFiles[fileToBeChunked].MetaHash = sha256.Sum256(dataOfMetahashBytes)
+	//fmt.Printf("%+v\n", gossiper.StoredFiles[fileToBeChunked])
+	fmt.Println(hex.EncodeToString(gossiper.StoredFiles[fileToBeChunked].MetaHash[:]))
+
 	return nil
 }
 func packetType(packet GossipPacket) int {
@@ -1066,8 +1074,8 @@ func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *b
 		SavedMessages:        make(map[string][]RumorMessage),
 		TalkingPeers:         make(map[string]ConectionInfo),
 		RoutingTable:         make(map[string]string),
-		StoredFiles:          make(map[string]FileInfo),
-		FilesBeingDownloaded: make(map[string]DownloadInfo),
+		StoredFiles:          make(map[string]*FileInfo),
+		FilesBeingDownloaded: make([]*DownloadInfo, 0),
 		AntiEntropyTimeout:   *antiEntropyTimeout,
 		Rtimer:               *rtimer,
 	}
@@ -1144,18 +1152,39 @@ func timeoutChecker(gossiper *Gossiper) {
 	}
 
 }
-func timeOutOfDownload(gossiper *Gossiper) {
+func timeoutOfDownload(gossiper *Gossiper) {
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
 
 		for key, fileDownload := range gossiper.FilesBeingDownloaded {
 			if fileDownload.Timeout <= 0 {
 				//TODO: Repeat the request again
-				//delete(gossiper.FilesBeingDownloaded, key)
-			} else {
-				gossiper.FilesBeingDownloaded[key] = DownloadInfo{
-					Timeout: gossiper.FilesBeingDownloaded[key].Timeout - 1,
+				message := &DataRequest{
+					Origin:      gossiper.Name,
+					Destination: fileDownload.Destination,
+					HashValue:   fileDownload.LastHashRequested,
+					HopLimit:    10,
 				}
+				message.HopLimit = message.HopLimit - 1
+				//If the hop limit has been exceeded
+				if message.HopLimit <= 0 {
+					return
+				}
+				//Restart the timeout, we can use the same session object as before
+				gossiper.FilesBeingDownloaded[key].Timeout = 5
+				//If not send to next hop
+				nextHop := gossiper.RoutingTable[message.Destination]
+				addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
+				packetToSend := &GossipPacket{DataRequest: message}
+				packetBytes, err := protobuf.Encode(packetToSend)
+				if err != nil {
+					panic(err)
+				}
+				gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
+			} else {
+				gossiper.FilesBeingDownloaded[key].Timeout = gossiper.FilesBeingDownloaded[key].Timeout - 1 /* = DownloadInfo{
+					Timeout: gossiper.FilesBeingDownloaded[key].Timeout - 1,
+				}*/
 			}
 		}
 	}
