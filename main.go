@@ -360,8 +360,12 @@ func fileDataReplyManagement(message *DataReply, gossiper *Gossiper) {
 }
 func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	//TODO: Leer sesion de download y ver el estado y ver que hacemos
+
+	//If this is not done instead of saving the value it saves a reference
+	data := make([]byte, len(message.Data))
+	copy(data, message.Data)
 	origin := message.Origin
-	sha256fDataAux := sha256.Sum256(message.Data)
+	sha256fDataAux := sha256.Sum256(data)
 	sha256fData := sha256fDataAux[:]
 	//Find the session
 	var session *DownloadInfo
@@ -384,7 +388,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 		//If it is the metahash
 		if bytes.Equal(sha256fData, session.MetaHash) {
 			//Save the info also to the gossiper struct
-			stringListOfHashes := string(message.Data)
+			stringListOfHashes := string(data)
 			listOfHashes := strings.Split(stringListOfHashes, ",")
 			//We have they keys of the map (hashes) but not the values
 			var chunk ChunkStruct
@@ -393,14 +397,14 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 				session.ChunkInformation = append(session.ChunkInformation, chunk)
 			}
 			//fmt.Printf("%+v\n", session.ChunkInformation)
-			fmt.Println("Recibiendo metafile: ", sha256.Sum256(message.Data))
+			fmt.Println("Recibiendo metafile: ", sha256.Sum256(data))
 			//We are going to ask for the first chunk
 			//session.LastHashRequested = session.ChunkInformation[0].ChunkHash
 			gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 				PathToSave:        session.PathToSave,
 				FileName:          session.FileName,
 				Timeout:           5,
-				Metafile:          message.Data,
+				Metafile:          data,
 				MetaHash:          session.MetaHash,
 				LastHashRequested: session.ChunkInformation[0].ChunkHash,
 				ChunkInformation:  session.ChunkInformation,
@@ -416,15 +420,14 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			copy(metaHashAux[:], session.MetaHash)
 			fileToStore := &FileInfo{
 				MetaHash:       metaHashAux,
-				Metafile:       message.Data,
+				Metafile:       data,
 				HashesOfChunks: make(map[[32]byte][]byte),
 			}
 			gossiper.StoredFiles[session.FileName] = fileToStore
 			sendDataRequest(dataRequest, gossiper)
 			//Is the hash of a chunk of the file
 		} else {
-			//copy(Aux, message.Data)
-			//message.Data = []byte("0")
+
 			var positionLastChunkReceived int
 			//fmt.Println(len(session.ChunkInformation))
 			//fmt.Println("Recibiendo chunk: ", &message, sha256.Sum256(Aux), sha256.Sum256(message.Data), message.Data[:10])
@@ -440,12 +443,12 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 					//oneChunk.ChunkData = message.Data
 					fmt.Println("chunk analyzed", index2)
 
-					session.ChunkInformation[index2].ChunkData = message.Data
+					session.ChunkInformation[index2].ChunkData = data
 					//copy(session.ChunkInformation[index2].ChunkData, message.Data)
 
 					//session.ChunkInformation = append(session.ChunkInformation, oneChunk)
 					positionLastChunkReceived = index2
-					fmt.Println("Guardando recibido chunk: ", sha256.Sum256(session.ChunkInformation[index2].ChunkData))
+					fmt.Println("saving chunk: ", sha256.Sum256(session.ChunkInformation[index2].ChunkData))
 					break
 				}
 			}
@@ -496,7 +499,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 				var metaChunkAux [32]byte
 				copy(metaChunkAux[:], message.HashValue)
 
-				gossiper.StoredFiles[session.FileName].HashesOfChunks[metaChunkAux] = message.Data
+				gossiper.StoredFiles[session.FileName].HashesOfChunks[metaChunkAux] = data
 				sendDataRequest(dataRequest, gossiper)
 			} else {
 				//TODO: File downloaded, joint parts and close session
