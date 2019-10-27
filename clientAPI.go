@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"path/filepath"
 
+	"github.com/dedis/protobuf"
 	. "github.com/mecanicus/Peerster/types"
 )
 
@@ -69,6 +73,48 @@ func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.
 			HopLimit:    10,
 		}
 		sendPrivateMessage(privateMessage, gossiper)
+		js, _ := json.Marshal("Saved")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+}
+func (gossiper *Gossiper) requestFileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		fileHashRequested, _ := hex.DecodeString(r.FormValue("requestedFileHash"))
+		selectedOrigin := r.FormValue("selectedOrigin")
+		fileName := r.FormValue("fileName")
+		message := &DataRequest{
+			Origin:      gossiper.Name,
+			Destination: selectedOrigin,
+			HashValue:   fileHashRequested,
+			HopLimit:    10,
+		}
+
+		message.HopLimit = message.HopLimit - 1
+		//If the hop limit has been exceeded
+		if message.HopLimit <= 0 {
+			return
+		}
+		//Open sesion of download
+		gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded, &DownloadInfo{
+			FileName:          fileName,
+			PathToSave:        filepath.Join(Downloads, fileName),
+			Timeout:           5,
+			LastHashRequested: message.HashValue,
+			MetaHash:          message.HashValue,
+			Destination:       message.Destination,
+		})
+		//If not send to next hop
+		nextHop := gossiper.RoutingTable[message.Destination]
+		addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
+		packetToSend := &GossipPacket{DataRequest: message}
+		packetBytes, err := protobuf.Encode(packetToSend)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("DOWNLOADING metafile of " + fileName + " from " + message.Destination)
+		gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
 		js, _ := json.Marshal("Saved")
 
 		w.Header().Set("Content-Type", "application/json")
@@ -145,6 +191,7 @@ func listenAPISocket(gossiper *Gossiper) {
 	http.HandleFunc("/node", gossiper.nodeHandler)
 	http.HandleFunc("/privateMessage", gossiper.privateMessagesHandler)
 	http.HandleFunc("/fileUpload", gossiper.filesUploadHandler)
+	http.HandleFunc("/requestFile", gossiper.requestFileHandler)
 
 	http.ListenAndServe(":8080", nil)
 

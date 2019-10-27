@@ -21,14 +21,29 @@
     <strong><p>Nodes</p></strong>
     <div id="NodeBox">
     </div>
+    <p>Private Message</p>
     <select id="selectOrigin">
             <option value="None">None</option>
       </select>
-      <label id ="label1" style="display:none;">Private Message
+      <label id ="label1" style="display:none;">
         <input type="text" id="privateMessageString" />
         </label>
       <button onclick="sendPrivateMessage()">Send private message</button>
-    <p>
+    </br>    </br>
+    <p>Request File</p>
+    <select id="selectOriginForFileRequest">
+            <option value="None">None</option>
+    </select>
+    <label id ="label2" style="display:none;">
+        </br>File Hash
+    <input type="text" id="requestFileHash" />
+</br>    </br>
+    </br>File Name
+    <input type="text" id="fileName" />
+    <button onclick="requestFile()">Request File</button>
+    </label>
+
+    <p>Upload a file       
     <button onclick="uploadFile()">Upload File</button>
     <div id="ChatBox">
         <div class="message">

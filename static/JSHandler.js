@@ -38,14 +38,14 @@ function sendFile(fileName){
     });
 }
 
-function uploadFile2(elemId) {
+/*function uploadFile2(elemId) {
     var elem = document.getElementById(elemId);
     if(elem && document.createEvent) {
        var evt = document.createEvent("MouseEvents");
        evt.initEvent("click", true, false);
        elem.dispatchEvent(evt);
     }
- }
+ }*/
 
 $(document).ready(function() {
     $("#selectOrigin").on("change", function() {
@@ -55,6 +55,17 @@ $(document).ready(function() {
         }
         else {
             $("#label1").show();
+        }
+    });
+});
+$(document).ready(function() {
+    $("#selectOriginForFileRequest").on("change", function() {
+        console.log($(this).val())
+        if ($(this).val() === "None") {
+            $("#label2").hide();
+        }
+        else {
+            $("#label2").show();
         }
     });
 });
@@ -71,6 +82,26 @@ function getID(){
         console.log( "Fail: " +  textStatus);
     });
 }
+function requestFile(){
+    selectedOrigin = $('#selectOriginForFileRequest').find(":selected").text();
+    requestedFileHash = document.getElementById("requestFileHash").value
+    fileName = document.getElementById("fileName").value
+    document.getElementById('requestFileHash').value = ''
+    document.getElementById('fileName').value = ''
+    //console.log(newNode)
+    $.ajax({
+        data: {"selectedOrigin" : selectedOrigin, "requestedFileHash": requestedFileHash,"fileName" :fileName},
+        type: "POST",
+        dataType: "json",
+        url: "http://localhost:8080/requestFile",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+		//console.log(selectedNode)
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
+    });
+}
 function getMessagesList(){
     $.ajax({
         data: {},
@@ -79,12 +110,7 @@ function getMessagesList(){
         url: "http://localhost:8080/messages",
     })
     .done(function( data, textStatus, jqXHR ) {
-        //for(var i in data) {
-        //    console.log(data[i]);
-        //}
         var arrayMenssages = data.map(htmlMessages)
-        //console.log(html_array[0])
-
         var stringToHTML = arrayMenssages.join(" ")
         document.getElementById("ChatBox").innerHTML = stringToHTML
     })
@@ -122,6 +148,14 @@ function getOriginsList(){
             if(!exists){
                 $('#selectOrigin').append($('<option></option>').val(p).html(p));
             }
+            //Now for the other selector
+            var exists = $("#selectOriginForFileRequest option")
+            .filter(function (i, o) { return o.value === p; })
+            .length > 0;
+
+         if(!exists){
+             $('#selectOriginForFileRequest').append($('<option></option>').val(p).html(p));
+         }
         });
     })
     .fail(function( jqXHR, textStatus, errorThrown ) {
