@@ -1,6 +1,5 @@
 package main
 
-//TODO: HAY UN PROBLEMA CUANDO ESTAS IN SYNC PERO TE HABLA ALGUIEN CON QUIEN NO TIENES SESION
 import (
 	"bytes"
 	"crypto/sha256"
@@ -138,6 +137,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 
 		packet := &GossipPacket{}
 		protobuf.Decode(buf, packet)
+
 		peerTalking := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
 		gossiper.talkingPeersMutex.RLock()
 		talkingPeersMap := gossiper.TalkingPeers
@@ -249,7 +249,7 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 		//Metafile is being requested
 		storedMetahash := storedFile.MetaHash[:]
 		if bytes.Equal(storedMetahash, hashFileRequested) {
-			fmt.Println("Enviando metafile: ", sha256.Sum256(storedFile.Metafile))
+			//fmt.Println("Enviando metafile: ", sha256.Sum256(storedFile.Metafile))
 			dataReplyToSend = &DataReply{
 				Origin:      gossiper.Name,
 				Destination: message.Origin,
@@ -263,7 +263,7 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 		for hashOfTheChunk, dataOfTheChunk := range storedFile.HashesOfChunks {
 			hashOfChunkAux := hashOfTheChunk[:]
 			if bytes.Equal(hashOfChunkAux, hashFileRequested) {
-				fmt.Println("Enviando chunk: ", sha256.Sum256(dataOfTheChunk))
+				//fmt.Println("Enviando chunk: ", sha256.Sum256(dataOfTheChunk))
 				dataReplyToSend = &DataReply{
 					Origin:      gossiper.Name,
 					Destination: message.Origin,
@@ -363,9 +363,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	var session *DownloadInfo
 	var index int
 
-	gossiper.filesBeingDownloadedMutex.Lock()
-	defer gossiper.filesBeingDownloadedMutex.Unlock()
-
+	gossiper.filesBeingDownloadedMutex.RLock()
 	for oneIndex, oneSession := range gossiper.FilesBeingDownloaded {
 		if bytes.Equal(oneSession.LastHashRequested, message.HashValue) {
 			session = oneSession
@@ -373,6 +371,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			break
 		}
 	}
+	gossiper.filesBeingDownloadedMutex.RUnlock()
 	sha256Expected := session.LastHashRequested
 	//Check if the file has being received correctly or is not the one we are looking for
 	if !bytes.Equal(sha256fData, sha256Expected) {
@@ -393,6 +392,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			}
 
 			//We are going to ask for the first chunk
+			gossiper.filesBeingDownloadedMutex.Lock()
 			gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 				PathToSave:        session.PathToSave,
 				FileName:          session.FileName,
@@ -403,6 +403,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 				ChunkInformation:  session.ChunkInformation,
 				Destination:       session.Destination,
 			}
+			gossiper.filesBeingDownloadedMutex.Unlock()
 			dataRequest := &DataRequest{
 				Destination: origin,
 				HopLimit:    10,
@@ -433,12 +434,14 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			}
 
 			//Have to save the last info in case is the last chunk
+			gossiper.filesBeingDownloadedMutex.Lock()
 			gossiper.FilesBeingDownloaded[index] = session
-
+			gossiper.filesBeingDownloadedMutex.Unlock()
 			//Check if we have files left to download
 			//If we do
 			if (positionLastChunkReceived+1 < len(session.ChunkInformation)) && (session.ChunkInformation[positionLastChunkReceived+1].ChunkData) == nil {
 				//Request next chunk
+				gossiper.filesBeingDownloadedMutex.Lock()
 				gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 					PathToSave:        session.PathToSave,
 					FileName:          session.FileName,
@@ -449,7 +452,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 					ChunkInformation:  session.ChunkInformation,
 					Destination:       session.Destination,
 				}
-
+				gossiper.filesBeingDownloadedMutex.Unlock()
 				dataRequest := &DataRequest{
 					Destination: origin,
 					HopLimit:    10,
@@ -461,7 +464,9 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 				copy(metaChunkAux[:], message.HashValue)
 
 				gossiper.StoredFiles[session.FileName].HashesOfChunks[metaChunkAux] = data
+				gossiper.filesBeingDownloadedMutex.RLock()
 				fmt.Println("DOWNLOADING " + gossiper.FilesBeingDownloaded[index].FileName + " chunk " + strconv.Itoa(positionLastChunkReceived+1) + " from " + gossiper.FilesBeingDownloaded[index].Destination)
+				gossiper.filesBeingDownloadedMutex.RUnlock()
 				sendDataRequest(dataRequest, gossiper)
 			} else {
 				fileDownloadedSuccessfully(index, message, gossiper)
@@ -472,7 +477,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 }
 func fileDownloadedSuccessfully(index int, message *DataReply, gossiper *Gossiper) {
 
-	gossiper.filesBeingDownloadedMutex.Lock()
+	gossiper.filesBeingDownloadedMutex.RLock()
 	session := gossiper.FilesBeingDownloaded[index]
 
 	pathToSaveFinalFile := session.PathToSave
@@ -483,11 +488,10 @@ func fileDownloadedSuccessfully(index int, message *DataReply, gossiper *Gossipe
 		chunkData2 := session.ChunkInformation[i].ChunkData
 		finalFile = append(finalFile, chunkData2...)
 	}
-	gossiper.filesBeingDownloadedMutex.Unlock()
+	gossiper.filesBeingDownloadedMutex.RUnlock()
 	//Save file in filesystem
 	ioutil.WriteFile(pathToSaveFinalFile, finalFile, 0644)
 
-	gossiper.filesBeingDownloadedMutex.Lock()
 	fmt.Println("RECONSTRUCTED file " + session.FileName)
 
 	//Update available files
@@ -511,6 +515,7 @@ func fileDownloadedSuccessfully(index int, message *DataReply, gossiper *Gossipe
 	}
 
 	//Close session
+	gossiper.filesBeingDownloadedMutex.Lock()
 	gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded[:index], gossiper.FilesBeingDownloaded[index+1:]...)
 	gossiper.filesBeingDownloadedMutex.Unlock()
 }
@@ -528,6 +533,7 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		return
 	}
 	//Open sesion of download
+	gossiper.filesBeingDownloadedMutex.Lock()
 	gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded, &DownloadInfo{
 		FileName:          *packet.File,
 		PathToSave:        filepath.Join(Downloads, *packet.File),
@@ -536,6 +542,7 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		MetaHash:          message.HashValue,
 		Destination:       message.Destination,
 	})
+	gossiper.filesBeingDownloadedMutex.Unlock()
 	//If not send to next hop
 	nextHop := gossiper.RoutingTable[message.Destination]
 	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
@@ -864,37 +871,44 @@ func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper)
 	ID := message.ID
 	check := true
 
-	gossiper.wantMutex.Lock()
-	defer gossiper.wantMutex.Unlock()
+	gossiper.wantMutex.RLock()
 	for _, peerStatusExaminated := range gossiper.Want {
 
 		if peerStatusExaminated.Identifier == origin {
 			check = false
 		}
 	}
+	gossiper.wantMutex.RUnlock()
 	if check == true {
 		wantInfo := PeerStatus{
 			Identifier: origin,
 			NextID:     1,
 		}
+		gossiper.wantMutex.Lock()
 		gossiper.Want = append(gossiper.Want, wantInfo)
+		gossiper.wantMutex.Unlock()
 	}
+	gossiper.wantMutex.RLock()
 	for index, peerStatusExaminated := range gossiper.Want {
 		if origin == peerStatusExaminated.Identifier {
 			if ID == (peerStatusExaminated.NextID) {
 				//Save the new index and save the package
+				gossiper.wantMutex.RUnlock()
 				gossiper.savedMessagesMutex.Lock()
 				messaggesOfOrigin := gossiper.SavedMessages[origin]
 				//It is important that they are stored in incoming order
 				messaggesOfOrigin = append(messaggesOfOrigin, *message)
 				gossiper.SavedMessages[origin] = messaggesOfOrigin
 				gossiper.savedMessagesMutex.Unlock()
+				gossiper.wantMutex.Lock()
 				gossiper.Want[index].Identifier = origin
 				gossiper.Want[index].NextID = ID + 1
+				gossiper.wantMutex.Unlock()
 				return true
 			}
 		}
 	}
+	gossiper.wantMutex.RUnlock()
 	return false
 
 }
@@ -995,14 +1009,16 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 		//Aqui se deberia entrar siempre excepto si es el caso de antientropia
 		//Que te escriben un status packet y teneis los mismos paquetes
 		//O si alguien te escribe y no te vale ningun paquete y tu le das tuyos
-		gossiper.talkingPeersMutex.Lock()
-		defer gossiper.talkingPeersMutex.Unlock()
+		gossiper.talkingPeersMutex.RLock()
 		_, ok := gossiper.TalkingPeers[senderAddress]
+		gossiper.talkingPeersMutex.RUnlock()
 		if ok {
 			//Recuperamos el mensaje
+			gossiper.talkingPeersMutex.Lock()
 			messageInClosingSesion := gossiper.TalkingPeers[senderAddress].MessageToGossip
 			//Cerramos la sesion
 			delete(gossiper.TalkingPeers, senderAddress)
+			gossiper.talkingPeersMutex.Unlock()
 			//Elegimos nuevo peer y le mandamos la sesion
 			choosenPeer := choseRandomPeerAndSendRumorPackage(messageInClosingSesion, gossiper)
 			connectionCreationRumorMessage(choosenPeer, messageInClosingSesion, gossiper)
@@ -1099,10 +1115,9 @@ func timeoutOfDownload(gossiper *Gossiper) {
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
 		gossiper.filesBeingDownloadedMutex.Lock()
-		defer gossiper.filesBeingDownloadedMutex.Unlock()
 		for key, fileDownload := range gossiper.FilesBeingDownloaded {
 			if gossiper.FilesBeingDownloaded[key] != nil {
-				fmt.Println("Timeout: ", gossiper.FilesBeingDownloaded[key].Timeout)
+				//fmt.Println("Timeout: ", gossiper.FilesBeingDownloaded[key].Timeout)
 				if fileDownload.Timeout <= 0 {
 					//Check if it is a chunk or a metafile and print it
 					//We are asking for the metachunk
@@ -1130,7 +1145,7 @@ func timeoutOfDownload(gossiper *Gossiper) {
 					message.HopLimit = message.HopLimit - 1
 					//If the hop limit has been exceeded
 					if message.HopLimit <= 0 {
-						return
+						break
 					}
 					//Restart the timeout, we can use the same session object as before
 					gossiper.FilesBeingDownloaded[key].Timeout = 5
@@ -1149,6 +1164,7 @@ func timeoutOfDownload(gossiper *Gossiper) {
 				}
 			}
 		}
+		gossiper.filesBeingDownloadedMutex.Unlock()
 	}
 }
 func main() {
@@ -1175,6 +1191,7 @@ func main() {
 
 		go timeoutOfDownload(gossiper)
 		go listenAPISocket(gossiper)
+
 		listenSocketNotSimple(socket, gossiper)
 
 	}

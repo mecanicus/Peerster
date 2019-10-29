@@ -17,7 +17,6 @@ import (
 
 func (gossiper *Gossiper) gossiperIDHandler(w http.ResponseWriter, r *http.Request) {
 	js, _ := json.Marshal(gossiper.Name)
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(js)
 }
@@ -124,7 +123,6 @@ func (gossiper *Gossiper) requestFileHandler(w http.ResponseWriter, r *http.Requ
 func (gossiper *Gossiper) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		fileName := r.FormValue("fileName")
-		fmt.Println(fileName)
 		fileIndexing(fileName, gossiper)
 		js, _ := json.Marshal("Saved")
 
