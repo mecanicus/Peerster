@@ -49,13 +49,32 @@ func (gossiper *Gossiper) nodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	}
 }
-func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.Request) {
+func (gossiper *Gossiper) listNodesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		var origins []string
 		for origin := range gossiper.RoutingTable {
 			origins = append(origins, origin)
 		}
 		js, _ := json.Marshal(origins)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+}
+func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		var messages []string
+		for _, messagesListPeer := range gossiper.savedPrivateMessages {
+			for _, message := range messagesListPeer {
+				stringToSend := "<strong>Origin: </strong>" + message.Origin + " "
+				stringToSend += "<strong>Destination: </strong>" + message.Destination
+				stringToSend += "<strong> Text: </strong>" + message.Text + " "
+				messages = append(messages, stringToSend)
+
+			}
+
+		}
+		js, _ := json.Marshal(messages)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(js)
@@ -71,7 +90,10 @@ func (gossiper *Gossiper) privateMessagesHandler(w http.ResponseWriter, r *http.
 			Destination: *pointerSelectedOrigin,
 			HopLimit:    10,
 		}
-		sendPrivateMessage(privateMessage, gossiper)
+		privateMessagesOfPeer := gossiper.savedPrivateMessages[privateMessage.Origin]
+		privateMessagesOfPeer = append(privateMessagesOfPeer, *privateMessage)
+		gossiper.savedPrivateMessages[privateMessage.Origin] = privateMessagesOfPeer
+		sendPrivateMessage(privateMessage, true, gossiper)
 		js, _ := json.Marshal("Saved")
 
 		w.Header().Set("Content-Type", "application/json")
@@ -190,6 +212,7 @@ func listenAPISocket(gossiper *Gossiper) {
 	http.HandleFunc("/privateMessage", gossiper.privateMessagesHandler)
 	http.HandleFunc("/fileUpload", gossiper.filesUploadHandler)
 	http.HandleFunc("/requestFile", gossiper.requestFileHandler)
+	http.HandleFunc("/listNodes", gossiper.listNodesHandler)
 
 	http.ListenAndServe(":8080", nil)
 

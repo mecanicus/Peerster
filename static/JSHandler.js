@@ -133,11 +133,42 @@ function getNodesList(){
         console.log( "Fail " +  textStatus);
     });
 }
+function getPrivateMessages(){
+    $.ajax({
+        data: {},
+        type: "GET",
+        dataType: "json",
+        url: "http://localhost:8080/privateMessage",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+        var arrayMenssages = data.map(htmlMessages)
+        var stringToHTML = arrayMenssages.join(" ")
+        document.getElementById("PrivateBox").innerHTML = stringToHTML
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
+    });
+}
+function getNodesList(){
+    $.ajax({
+        type: "GET",
+        dataType: "json",
+        url: "http://localhost:8080/node",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+        var arrayNodes = data.map(htmlKnowNodes)
+        var stringToHTML = arrayNodes.join(" ")
+        document.getElementById("NodeBox").innerHTML = stringToHTML
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
+    });
+}
 function getOriginsList(){
     $.ajax({
         type: "GET",
         dataType: "json",
-        url: "http://localhost:8080/privateMessage",
+        url: "http://localhost:8080/listNodes",
     })
     .done(function( data, textStatus, jqXHR ) {
         $.each(data, function(i, p) {
@@ -185,11 +216,13 @@ function getEverything(){
     getMessagesList()
     getNodesList()
     getOriginsList()
+    getPrivateMessages()
 }
 function getMessagesAndNodesAndOrigins(){
     getMessagesList()
     getNodesList()
     getOriginsList()
+    getPrivateMessages()
 }
 $(document).ready(function () {
     getEverything()

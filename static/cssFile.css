@@ -3,6 +3,11 @@ overflow-y: scroll;
 min-width: 200px;
 height: 200px;
 }
+#PrivateBox{
+overflow-y: scroll;
+min-width: 200px;
+height: 200px;
+}
 #NodeBox{
     overflow-y: scroll;
     min-width: 200px;

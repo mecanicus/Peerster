@@ -21,16 +21,12 @@
     <strong><p>Nodes</p></strong>
     <div id="NodeBox">
     </div>
-    <p>Private Message</p>
-    <select id="selectOrigin">
-            <option value="None">None</option>
-      </select>
-      <label id ="label1" style="display:none;">
-        <input type="text" id="privateMessageString" />
-        </label>
-      <button onclick="sendPrivateMessage()">Send private message</button>
-    </br>    </br>
-    <p>Request File</p>
+    <h2>Messages Chat</h2>
+    <div id="ChatBox">
+        <div class="message">
+        </div>
+    </div>
+<h3>Request File</h3>
     <select id="selectOriginForFileRequest">
             <option value="None">None</option>
     </select>
@@ -43,11 +39,23 @@
     <button onclick="requestFile()">Request File</button>
     </label>
 
-    <p>Upload a file       
+    <h3>Upload a File</h3> 
     <button onclick="uploadFile()">Upload File</button>
-    <div id="ChatBox">
+    </br>
+</br>
+<h3>Private Message</h3>
+<select id="selectOrigin">
+        <option value="None">None</option>
+  </select>
+  <label id ="label1" style="display:none;">
+    <input type="text" id="privateMessageString" />
+    </label>
+  <button onclick="sendPrivateMessage()">Send private message</button>
+<h2>Private Chat</h2>   
+    <div id="PrivateBox">
         <div class="message">
         </div>
     </div>
+
 </body>
 </html>

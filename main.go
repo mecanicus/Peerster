@@ -30,6 +30,7 @@ type Gossiper struct {
 	wantMutex                 sync.RWMutex
 	SavedMessages             map[string][]RumorMessage
 	savedMessagesMutex        sync.RWMutex
+	savedPrivateMessages      map[string][]PrivateMessage
 	TalkingPeers              map[string]ConectionInfo
 	talkingPeersMutex         sync.RWMutex
 	RoutingTable              map[string]string
@@ -217,7 +218,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 		case Private:
 			//It is a private message
 			message := packet.Private
-			sendPrivateMessage(message, gossiper)
+			sendPrivateMessage(message, false, gossiper)
 		case FileRequest:
 			message := packet.DataRequest
 			fileDataRequestManagement(message, gossiper)
@@ -757,11 +758,27 @@ func privateMessageCreation(clientMessage *Message, gossiper *Gossiper) {
 		HopLimit:    10,
 	}
 
-	sendPrivateMessage(privateMessage, gossiper)
+	sendPrivateMessage(privateMessage, true, gossiper)
 }
-func sendPrivateMessage(message *PrivateMessage, gossiper *Gossiper) {
+func sendPrivateMessage(message *PrivateMessage, ourClient bool, gossiper *Gossiper) {
 	if message.Destination == gossiper.Name {
-		fmt.Println("PRIVATE origin " + message.Origin + " hop-limit " + strconv.FormatUint(uint64(message.HopLimit), 10) + " contents " + message.Text)
+		//_, ok := gossiper.savedPrivateMessages[message.Origin]
+		//Save it
+		//if ok {
+		privateMessagesOfPeer := gossiper.savedPrivateMessages[message.Origin]
+		privateMessagesOfPeer = append(privateMessagesOfPeer, *message)
+		gossiper.savedPrivateMessages[message.Origin] = privateMessagesOfPeer
+		/*} else {
+			//First private message of that peer
+			gossiper.savedPrivateMessages[message.Origin] = *message
+		}*/
+		//if the sender was our client
+		if ourClient {
+			fmt.Println("CLIENT MESSAGE " + message.Text + " dest " + message.Destination)
+
+		} else {
+			fmt.Println("PRIVATE origin " + message.Origin + " hop-limit " + strconv.FormatUint(uint64(message.HopLimit), 10) + " contents " + message.Text)
+		}
 		//The message is for someone else
 	} else {
 		message.HopLimit = message.HopLimit - 1
@@ -1050,6 +1067,7 @@ func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *b
 		Mode:                 *gossiperMode,
 		Want:                 wantList,
 		SavedMessages:        make(map[string][]RumorMessage),
+		savedPrivateMessages: make(map[string][]PrivateMessage),
 		TalkingPeers:         make(map[string]ConectionInfo),
 		RoutingTable:         make(map[string]string),
 		StoredFiles:          make(map[string]*FileInfo),
