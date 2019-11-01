@@ -34,6 +34,7 @@ type Gossiper struct {
 	TalkingPeers              map[string]ConectionInfo
 	talkingPeersMutex         sync.RWMutex
 	RoutingTable              map[string]string
+	routingTableMutex         sync.RWMutex
 	StoredFiles               map[string]*FileInfo //The key is the file name
 	FilesBeingDownloaded      []*DownloadInfo
 	filesBeingDownloadedMutex sync.RWMutex
@@ -291,7 +292,9 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 	if message.HopLimit <= 0 {
 		return
 	}
+	gossiper.routingTableMutex.RLock()
 	nextHop := gossiper.RoutingTable[dataReplyToSend.Destination]
+	gossiper.routingTableMutex.RUnlock()
 	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 	packetToSend := &GossipPacket{DataReply: dataReplyToSend}
 	packetBytes, err := protobuf.Encode(packetToSend)
@@ -318,7 +321,9 @@ func sendDataRequest(message *DataRequest, gossiper *Gossiper) {
 		return
 	}
 	//If not send to next hop
+	gossiper.routingTableMutex.RLock()
 	nextHop := gossiper.RoutingTable[message.Destination]
+	gossiper.routingTableMutex.RUnlock()
 	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 	packetToSend := &GossipPacket{DataRequest: message}
 	packetBytes, err := protobuf.Encode(packetToSend)
@@ -341,7 +346,9 @@ func fileDataReplyManagement(message *DataReply, gossiper *Gossiper) {
 			return
 		}
 		//If not send to next hop
+		gossiper.routingTableMutex.RLock()
 		nextHop := gossiper.RoutingTable[message.Destination]
+		gossiper.routingTableMutex.RUnlock()
 		addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 		packetToSend := &GossipPacket{DataReply: message}
 		packetBytes, err := protobuf.Encode(packetToSend)
@@ -363,7 +370,6 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	//Find the session
 	var session *DownloadInfo
 	var index int
-
 	gossiper.filesBeingDownloadedMutex.RLock()
 	for oneIndex, oneSession := range gossiper.FilesBeingDownloaded {
 		if bytes.Equal(oneSession.LastHashRequested, message.HashValue) {
@@ -374,6 +380,12 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	}
 	gossiper.filesBeingDownloadedMutex.RUnlock()
 	sha256Expected := session.LastHashRequested
+	//Check is he has the file (the data field is empty)
+	if checkPeerHasFile(data, index, gossiper) == false {
+		//If the does not have it delete session and leave method
+		return
+	}
+
 	//Check if the file has being received correctly or is not the one we are looking for
 	if !bytes.Equal(sha256fData, sha256Expected) {
 
@@ -476,6 +488,16 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 
 	}
 }
+func checkPeerHasFile(dataOfMessage []byte, index int, gossiper *Gossiper) bool {
+	if dataOfMessage == nil || len(dataOfMessage) == 0 {
+		//Close session
+		gossiper.filesBeingDownloadedMutex.Lock()
+		gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded[:index], gossiper.FilesBeingDownloaded[index+1:]...)
+		gossiper.filesBeingDownloadedMutex.Unlock()
+		return false
+	}
+	return true
+}
 func fileDownloadedSuccessfully(index int, message *DataReply, gossiper *Gossiper) {
 
 	gossiper.filesBeingDownloadedMutex.RLock()
@@ -545,7 +567,9 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 	})
 	gossiper.filesBeingDownloadedMutex.Unlock()
 	//If not send to next hop
+	gossiper.routingTableMutex.RLock()
 	nextHop := gossiper.RoutingTable[message.Destination]
+	gossiper.routingTableMutex.RUnlock()
 	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 	packetToSend := &GossipPacket{DataRequest: message}
 	packetBytes, err := protobuf.Encode(packetToSend)
@@ -732,7 +756,9 @@ func nextHopManagement(message *RumorMessage, peerTalking string, gossiper *Goss
 	gossiper.savedMessagesMutex.RUnlock()
 	//If it doesn't exist (first message from him) we save it
 	if !ok {
+		gossiper.routingTableMutex.Lock()
 		gossiper.RoutingTable[origin] = peerTalking
+		gossiper.routingTableMutex.Unlock()
 
 		if message.Text != "" {
 			fmt.Println("DSDV " + origin + " " + peerTalking)
@@ -741,7 +767,9 @@ func nextHopManagement(message *RumorMessage, peerTalking string, gossiper *Goss
 		//If the received message is newer than the one we have
 
 	} else {
+		gossiper.routingTableMutex.Lock()
 		gossiper.RoutingTable[origin] = peerTalking
+		gossiper.routingTableMutex.Unlock()
 
 		if message.Text != "" {
 			fmt.Println("DSDV " + origin + " " + peerTalking)
@@ -787,7 +815,9 @@ func sendPrivateMessage(message *PrivateMessage, ourClient bool, gossiper *Gossi
 			return
 		}
 		//If not send to next hop
+		gossiper.routingTableMutex.RLock()
 		nextHop := gossiper.RoutingTable[message.Destination]
+		gossiper.routingTableMutex.RUnlock()
 		addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 		packetToSend := &GossipPacket{Private: message}
 		packetBytes, err := protobuf.Encode(packetToSend)
@@ -1168,7 +1198,9 @@ func timeoutOfDownload(gossiper *Gossiper) {
 					//Restart the timeout, we can use the same session object as before
 					gossiper.FilesBeingDownloaded[key].Timeout = 5
 					//If not send to next hop
+					gossiper.routingTableMutex.RLock()
 					nextHop := gossiper.RoutingTable[message.Destination]
+					gossiper.routingTableMutex.RUnlock()
 					addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
 					packetToSend := &GossipPacket{DataRequest: message}
 					packetBytes, err := protobuf.Encode(packetToSend)
