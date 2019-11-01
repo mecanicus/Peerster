@@ -35,10 +35,37 @@ func main() {
 
 	if (*msg != "") && (*request != "") {
 		fmt.Errorf("ERROR (Bad argument combination)")
-
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
+	}
+	if (*dest != "") && (*filePath != "") && (*request == "") {
+		fmt.Errorf("ERROR (Bad argument combination)")
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
+	}
+	if (*msg != "") && (*filePath != "") {
+		fmt.Errorf("ERROR (Bad argument combination)")
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
+	}
+	if ((*dest != "") && (*filePath == "") && (*msg == "")) || ((*dest != "") && (*msg != "") && (*filePath != "")) {
+		fmt.Errorf("ERROR (Bad argument combination)")
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
+	}
+	if (*dest == "") && (*filePath == "") && (*request == "") && (*msg == "") {
+		fmt.Errorf("ERROR (Bad argument combination)")
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
+	}
+	if (*request != "") && (*filePath == "") {
+		fmt.Errorf("ERROR (Bad argument combination)")
+		fmt.Println("ERROR (Bad argument combination)")
+		os.Exit(1)
 	}
 	if (len(*request) != 64) && (*request != "") {
 		fmt.Errorf("ERROR (Unable to decode hex hash)")
+		fmt.Println("ERROR (Unable to decode hex hash)")
 		//TODO: Return 1 or the os.Exit?
 		os.Exit(1)
 	}
