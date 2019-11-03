@@ -47,7 +47,7 @@ func flagReader() (*string, *string, *bool, *int, *string, *int, *int) {
 	uiPort := flag.Int("UIPort", 8080, "UIPort")
 	gossipAddr := flag.String("gossipAddr", "127.0.0.1:5000", "gossipAddr")
 	gossiperName := flag.String("name", "GossiperName", "name")
-	peersList := flag.String("peers", " ", "peers list")
+	peersList := flag.String("peers", "", "peers list")
 	gossiperMode := flag.Bool("simple", false, "mode to run")
 	antiEntropyTimeout := flag.Int("antiEntropy", 10, "Anti entropy timeout")
 	rtimer := flag.Int("rtimer", 0, "Amount of time between route messages, in seconds")
@@ -104,6 +104,7 @@ func listenSocket(socket *GossiperSocket, gossiper *Gossiper) {
 		if checkPeersListSimple(message.RelayPeerAddr, gossiper) == false {
 			addPeerToListSimple(message.RelayPeerAddr, gossiper)
 		}
+		printKnownPeers(gossiper)
 		sendToPeersComingFromPeer(message, gossiper)
 	}
 }
@@ -287,10 +288,13 @@ func dataReplyCreationAndSend(message *DataRequest, gossiper *Gossiper) {
 		}
 	}
 	//Send the reply packet
-	dataReplyToSend.HopLimit = message.HopLimit - 1
 	//If the hop limit has been exceeded
-	if message.HopLimit <= 0 {
+	if dataReplyToSend.HopLimit <= 0 {
 		return
+	}
+	//Just to check the message is not going to us
+	if dataReplyToSend.Destination != gossiper.Name {
+		dataReplyToSend.HopLimit = dataReplyToSend.HopLimit - 1
 	}
 	gossiper.routingTableMutex.RLock()
 	nextHop := gossiper.RoutingTable[dataReplyToSend.Destination]
@@ -315,11 +319,15 @@ func fileDataRequestManagement(message *DataRequest, gossiper *Gossiper) {
 	}
 }
 func sendDataRequest(message *DataRequest, gossiper *Gossiper) {
-	message.HopLimit = message.HopLimit - 1
 	//If the hop limit has been exceeded
 	if message.HopLimit <= 0 {
 		return
 	}
+	//Just to check the message is not going to us
+	if message.Destination != gossiper.Name {
+		message.HopLimit = message.HopLimit - 1
+	}
+
 	//If not send to next hop
 	gossiper.routingTableMutex.RLock()
 	nextHop := gossiper.RoutingTable[message.Destination]
@@ -340,11 +348,13 @@ func fileDataReplyManagement(message *DataReply, gossiper *Gossiper) {
 
 		//The file reply is for someone else, just route
 	} else {
-		message.HopLimit = message.HopLimit - 1
+
 		//If the hop limit has been exceeded
 		if message.HopLimit <= 0 {
 			return
 		}
+		message.HopLimit = message.HopLimit - 1
+
 		//If not send to next hop
 		gossiper.routingTableMutex.RLock()
 		nextHop := gossiper.RoutingTable[message.Destination]
@@ -549,12 +559,15 @@ func fileDownloadRequest(packet *Message, gossiper *Gossiper) {
 		HashValue:   *packet.Request,
 		HopLimit:    10,
 	}
-
-	message.HopLimit = message.HopLimit - 1
 	//If the hop limit has been exceeded
 	if message.HopLimit <= 0 {
 		return
 	}
+	//Just to check the message is not going to us
+	if message.Destination != gossiper.Name {
+		message.HopLimit = message.HopLimit - 1
+	}
+
 	//Open sesion of download
 	gossiper.filesBeingDownloadedMutex.Lock()
 	gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded, &DownloadInfo{
@@ -809,11 +822,13 @@ func sendPrivateMessage(message *PrivateMessage, ourClient bool, gossiper *Gossi
 		}
 		//The message is for someone else
 	} else {
-		message.HopLimit = message.HopLimit - 1
+
 		//If the hop limit has been exceeded
 		if message.HopLimit <= 0 {
 			return
 		}
+		message.HopLimit = message.HopLimit - 1
+
 		//If not send to next hop
 		gossiper.routingTableMutex.RLock()
 		nextHop := gossiper.RoutingTable[message.Destination]
@@ -863,7 +878,10 @@ func sendToPeersComingFromClient(message *SimpleMessage, gossiper *Gossiper) {
 			fmt.Println(peerAddress)
 			continue
 		}
-		fmt.Print(peerAddress + ",")
+		if peerAddress != "" {
+			fmt.Print(peerAddress + ",")
+			continue
+		}
 	}
 }
 func printKnownPeers(gossiper *Gossiper) {
@@ -889,28 +907,15 @@ func sendToPeersComingFromPeer(message *SimpleMessage, gossiper *Gossiper) {
 	originalRelay := message.RelayPeerAddr
 	message.RelayPeerAddr = gossiper.Addr
 	packetToSend := &GossipPacket{Simple: message}
-	fmt.Print("PEERS ")
-	for index, peerAddress := range gossiper.KnownPeers {
+	for _, peerAddress := range gossiper.KnownPeers {
 		if peerAddress == originalRelay {
-			if index == (len(gossiper.KnownPeers) - 1) {
-				fmt.Println(peerAddress)
-				continue
-			}
-			if peerAddress != "" {
-				fmt.Print(peerAddress + ",")
-				continue
-			}
+			//Not broadcast back to him
+			continue
 		} else {
-
 			packetBytes, _ := protobuf.Encode(packetToSend)
 			choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerAddress)
 			gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
 		}
-		if index == (len(gossiper.KnownPeers) - 1) {
-			fmt.Println(peerAddress)
-			continue
-		}
-		fmt.Print(peerAddress + ",")
 	}
 }
 func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper) bool {
@@ -1189,12 +1194,15 @@ func timeoutOfDownload(gossiper *Gossiper) {
 						HashValue:   fileDownload.LastHashRequested,
 						HopLimit:    10,
 					}
-
-					message.HopLimit = message.HopLimit - 1
 					//If the hop limit has been exceeded
 					if message.HopLimit <= 0 {
 						break
 					}
+					//Just to check the message is not going to us
+					if message.Destination != gossiper.Name {
+						message.HopLimit = message.HopLimit - 1
+					}
+
 					//Restart the timeout, we can use the same session object as before
 					gossiper.FilesBeingDownloaded[key].Timeout = 5
 					//If not send to next hop
