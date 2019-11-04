@@ -35,6 +35,8 @@ type Gossiper struct {
 	talkingPeersMutex         sync.RWMutex
 	RoutingTable              map[string]string
 	routingTableMutex         sync.RWMutex
+	RoutingTableControl       map[string]uint32 //Key name of peer, value higher ID received
+	routingTableControlMutex  sync.RWMutex
 	StoredFiles               map[string]*FileInfo //The key is the file name
 	FilesBeingDownloaded      []*DownloadInfo
 	filesBeingDownloadedMutex sync.RWMutex
@@ -104,7 +106,7 @@ func listenSocket(socket *GossiperSocket, gossiper *Gossiper) {
 		if checkPeersListSimple(message.RelayPeerAddr, gossiper) == false {
 			addPeerToListSimple(message.RelayPeerAddr, gossiper)
 		}
-		printKnownPeers(gossiper)
+		//printKnownPeers(gossiper)
 		sendToPeersComingFromPeer(message, gossiper)
 	}
 }
@@ -150,7 +152,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 		if checkPeersList(sender, gossiper) == false {
 			addPeerToList(sender, gossiper)
 		}
-		printKnownPeers(gossiper)
+		//printKnownPeers(gossiper)
 		packetType := packetType(*packet)
 		switch packetType {
 		case Status:
@@ -176,14 +178,14 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 			if message.Text != "" {
 				fmt.Println("RUMOR origin " + message.Origin + " from " + peerTalking + " ID " + fmt.Sprint(message.ID) + " contents " + message.Text)
 			}
+			nextHopManagement(message, peerTalking, gossiper)
 			//El paquete es un rumor
 			//AHORA ESTA SEPARADO EN DOS CASOS, AHORA MISMO NO HACE FALTA PORQUE SON IGUALES, A LO MEJOR ES UTIL EN EL FUTURO
 			//Tenemos una conexion abierta con el
 			if exists == true {
-				if checkingIfExpectedMessageAndSave(message, gossiper) == true {
+				if checkingIfExpectedMessageAndSave(message, peerTalking, gossiper) == true {
 					//Empezar rumormorgering process con otro peer
 					choosenPeer := choseRandomPeerAndSendRumorPackage(message, gossiper)
-					nextHopManagement(message, peerTalking, gossiper)
 					connectionCreationRumorMessage(choosenPeer, message, gossiper)
 
 					//Mandar un mensaje de status de vuelta (todo ok)
@@ -200,8 +202,7 @@ func listenSocketNotSimple(socket *GossiperSocket, gossiper *Gossiper) {
 
 				//No tenemos una conexion abierta con el
 			} else {
-				if checkingIfExpectedMessageAndSave(message, gossiper) == true {
-					nextHopManagement(message, peerTalking, gossiper)
+				if checkingIfExpectedMessageAndSave(message, peerTalking, gossiper) == true {
 					//Empezar rumormorgering process con otro peer
 
 					choosenPeer := choseRandomPeerAndSendRumorPackage(message, gossiper)
@@ -764,31 +765,60 @@ func nextHopManagement(message *RumorMessage, peerTalking string, gossiper *Goss
 	//TODO: Ask what no output of DSDV messages mean, do we refresh the table without printing?
 	origin := message.Origin
 	// We take the last message of the peer and check the ID
-	gossiper.savedMessagesMutex.RLock()
+	/*gossiper.savedMessagesMutex.RLock()
 	_, ok := gossiper.SavedMessages[origin]
-	gossiper.savedMessagesMutex.RUnlock()
-	//If it doesn't exist (first message from him) we save it
-	if !ok {
+	gossiper.savedMessagesMutex.RUnlock()*/
+	gossiper.routingTableControlMutex.RLock()
+	_, ok2 := gossiper.RoutingTableControl[origin]
+	gossiper.routingTableControlMutex.RUnlock()
+	//First time we see it
+	if !ok2 {
+		gossiper.routingTableControlMutex.Lock()
+		gossiper.RoutingTableControl[origin] = 1
+		gossiper.routingTableControlMutex.Unlock()
 		gossiper.routingTableMutex.Lock()
 		gossiper.RoutingTable[origin] = peerTalking
 		gossiper.routingTableMutex.Unlock()
-
-		if message.Text != "" {
-			fmt.Println("DSDV " + origin + " " + peerTalking)
-		}
-		return
-		//If the received message is newer than the one we have
-
-	} else {
-		gossiper.routingTableMutex.Lock()
-		gossiper.RoutingTable[origin] = peerTalking
-		gossiper.routingTableMutex.Unlock()
-
 		if message.Text != "" {
 			fmt.Println("DSDV " + origin + " " + peerTalking)
 		}
 		return
 	}
+	//If newer message save it
+	if message.ID > gossiper.RoutingTableControl[origin] {
+		gossiper.routingTableControlMutex.Lock()
+		gossiper.RoutingTableControl[origin] = message.ID
+		gossiper.routingTableControlMutex.Unlock()
+		gossiper.routingTableMutex.Lock()
+		gossiper.RoutingTable[origin] = peerTalking
+		gossiper.routingTableMutex.Unlock()
+		if message.Text != "" {
+			fmt.Println("DSDV " + origin + " " + peerTalking)
+		}
+	}
+	/*
+		//If it doesn't exist (first message from him) we save it
+		if !ok {
+			gossiper.routingTableMutex.Lock()
+			gossiper.RoutingTable[origin] = peerTalking
+			gossiper.routingTableMutex.Unlock()
+
+			if message.Text != "" {
+				fmt.Println("DSDV " + origin + " " + peerTalking)
+			}
+			return
+			//If the received message is newer than the one we have
+
+		} else {
+			gossiper.routingTableMutex.Lock()
+			gossiper.RoutingTable[origin] = peerTalking
+			gossiper.routingTableMutex.Unlock()
+
+			if message.Text != "" {
+				fmt.Println("DSDV " + origin + " " + peerTalking)
+			}
+			return
+		}*/
 }
 func privateMessageCreation(clientMessage *Message, gossiper *Gossiper) {
 	privateMessage := &PrivateMessage{
@@ -802,6 +832,9 @@ func privateMessageCreation(clientMessage *Message, gossiper *Gossiper) {
 	sendPrivateMessage(privateMessage, true, gossiper)
 }
 func sendPrivateMessage(message *PrivateMessage, ourClient bool, gossiper *Gossiper) {
+	if ourClient {
+		fmt.Println("CLIENT MESSAGE " + message.Text + " dest " + message.Destination)
+	}
 	if message.Destination == gossiper.Name {
 		//_, ok := gossiper.savedPrivateMessages[message.Origin]
 		//Save it
@@ -814,10 +847,7 @@ func sendPrivateMessage(message *PrivateMessage, ourClient bool, gossiper *Gossi
 			gossiper.savedPrivateMessages[message.Origin] = *message
 		}*/
 		//if the sender was our client
-		if ourClient {
-			fmt.Println("CLIENT MESSAGE " + message.Text + " dest " + message.Destination)
-
-		} else {
+		if !ourClient {
 			fmt.Println("PRIVATE origin " + message.Origin + " hop-limit " + strconv.FormatUint(uint64(message.HopLimit), 10) + " contents " + message.Text)
 		}
 		//The message is for someone else
@@ -918,7 +948,7 @@ func sendToPeersComingFromPeer(message *SimpleMessage, gossiper *Gossiper) {
 		}
 	}
 }
-func checkingIfExpectedMessageAndSave(message *RumorMessage, gossiper *Gossiper) bool {
+func checkingIfExpectedMessageAndSave(message *RumorMessage, peerTalking string, gossiper *Gossiper) bool {
 	origin := message.Origin
 	ID := message.ID
 	check := true
@@ -979,20 +1009,20 @@ func createNewStatusPackageAndSend(sender *net.UDPAddr, gossiper *Gossiper) {
 func sendRumorPackage(rumorMessage *RumorMessage, sender *net.UDPAddr, gossiper *Gossiper) {
 	packetToSend := &GossipPacket{Rumor: rumorMessage}
 	packetBytes, err := protobuf.Encode(packetToSend)
-	senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
-	fmt.Println("MONGERING with " + senderAddress)
+	//senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
+	//fmt.Println("MONGERING with " + senderAddress)
 	gossiper.Socket.Conn.WriteToUDP(packetBytes, sender)
 	if err != nil {
 		panic(err)
 	}
 }
 func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, gossiper *Gossiper) {
-	senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
+	/*senderAddress := sender.IP.String() + ":" + strconv.Itoa(sender.Port)
 	stringToSend := ""
 	for _, peerWantStatus := range statusMessage.Want {
 		stringToSend = stringToSend + " peer " + peerWantStatus.Identifier + " nextID " + fmt.Sprint(peerWantStatus.NextID)
 	}
-	fmt.Println("STATUS from " + senderAddress + stringToSend)
+	fmt.Println("STATUS from " + senderAddress + stringToSend)*/
 
 	//No need for lock, only reading in slice
 	for _, peerStatusExaminated := range gossiper.Want {
@@ -1050,7 +1080,7 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 			}
 		}
 	}
-	fmt.Println("IN SYNC WITH " + senderAddress)
+	//fmt.Println("IN SYNC WITH " + senderAddress)
 	//Si hemos llegado aqui es porque tenemos todo en igualdad de condiciones a si que hay que tirar moneda
 
 	result := rand.Int()
@@ -1074,7 +1104,7 @@ func statusDecisionMaking(sender *net.UDPAddr, statusMessage *StatusPacket, goss
 			//Elegimos nuevo peer y le mandamos la sesion
 			choosenPeer := choseRandomPeerAndSendRumorPackage(messageInClosingSesion, gossiper)
 			connectionCreationRumorMessage(choosenPeer, messageInClosingSesion, gossiper)
-			fmt.Println("FLIPPED COIN sending rumor to " + choosenPeer)
+			//fmt.Println("FLIPPED COIN sending rumor to " + choosenPeer)
 		}
 
 	} else {
@@ -1105,6 +1135,7 @@ func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *b
 		savedPrivateMessages: make(map[string][]PrivateMessage),
 		TalkingPeers:         make(map[string]ConectionInfo),
 		RoutingTable:         make(map[string]string),
+		RoutingTableControl:  make(map[string]uint32),
 		StoredFiles:          make(map[string]*FileInfo),
 		FilesBeingDownloaded: make([]*DownloadInfo, 0),
 		AntiEntropyTimeout:   *antiEntropyTimeout,
@@ -1135,7 +1166,7 @@ func choseRandomPeerAndSendRumorPackage(message *RumorMessage, gossiper *Gossipe
 	packetBytes, _ := protobuf.Encode(packetToSend)
 	choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerToSendRumor)
 	gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
-	fmt.Println("MONGERING with " + peerToSendRumor)
+	//fmt.Println("MONGERING with " + peerToSendRumor)
 	return peerToSendRumor
 }
 func choseRandomPeerAndSendStatusPackage(gossiper *Gossiper) {
