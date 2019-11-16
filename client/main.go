@@ -12,22 +12,24 @@ import (
 	. "github.com/mecanicus/Peerster/types"
 )
 
-func flagReader() (*int, *string, *string, *string, *string) {
+func flagReader() (*int, *string, *string, *string, *string, *string, *int) {
 	UIPort := flag.Int("UIPort", 8080, "UIPort")
 	message := flag.String("msg", "", "gossipAddr")
 	dest := flag.String("dest", "", "Specific destination to send message to")
 	filePath := flag.String("file", "", "File path")
 	request := flag.String("request", "", "request a chunk or metafile of this hash")
+	keywords := flag.String("keywords", "", "keywords to download file")
+	budget := flag.Int("budget", 2, "budget to search for files")
 	flag.Parse()
 
 	/*fmt.Println("ui port ", *UIPort)
 	fmt.Println("client message", *message)
 	*/
-	return UIPort, message, dest, filePath, request
+	return UIPort, message, dest, filePath, request, keywords, budget
 }
 func main() {
 
-	UIport, msg, dest, filePath, request := flagReader()
+	UIport, msg, dest, filePath, request, keywords, budget := flagReader()
 	ip := "127.0.0.1:" + strconv.Itoa(*UIport)
 	message := &Message{}
 

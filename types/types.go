@@ -3,12 +3,14 @@ package types
 import "net"
 
 const (
-	Simple      int = 1
-	Rumor       int = 2
-	Status      int = 3
-	Private     int = 4
-	FileRequest int = 5
-	FileReply   int = 6
+	Simple         int = 1
+	Rumor          int = 2
+	Status         int = 3
+	Private        int = 4
+	FileRequest    int = 5
+	FileReply      int = 6
+	SearchRequestM int = 7
+	SearchReplyM   int = 8
 )
 const SharedFiles string = "_SharedFiles"
 const Downloads string = "_Downloads"
@@ -35,6 +37,28 @@ type DownloadInfo struct {
 	ChunkInformation  []ChunkStruct //Where all the chunk's info is stored (hashes/data)
 	Destination       string        //Used in case of failed download to know who to repeat the request
 }
+type SearchRequest struct {
+	Origin   string
+	Budget   uint64
+	Keywords []string
+}
+type SearchRequestSessions struct {
+	SearchRequest *SearchRequest
+	TimeElapsed   int
+}
+type SearchReply struct {
+	Origin      string
+	Destination string
+	HopLimit    uint32
+	Results     []*SearchResult
+}
+type SearchResult struct {
+	FileName     string
+	MetafileHash []byte
+	ChunkMap     []uint64
+	ChunkCount   uint64
+}
+
 type ChunkStruct struct {
 	ChunkHash []byte
 	ChunkData []byte
@@ -86,12 +110,14 @@ type GossiperSocket struct {
 	Conn    *net.UDPConn
 }
 type GossipPacket struct {
-	Simple      *SimpleMessage
-	Rumor       *RumorMessage
-	Status      *StatusPacket
-	Private     *PrivateMessage
-	DataRequest *DataRequest
-	DataReply   *DataReply
+	Simple        *SimpleMessage
+	Rumor         *RumorMessage
+	Status        *StatusPacket
+	Private       *PrivateMessage
+	DataRequest   *DataRequest
+	DataReply     *DataReply
+	SearchRequest *SearchRequest
+	SearchReply   *SearchReply
 }
 
 type UDPAddr struct {
