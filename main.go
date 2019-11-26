@@ -44,6 +44,10 @@ type Gossiper struct {
 	FilesBeingDownloaded      []*DownloadInfo
 	filesBeingDownloadedMutex sync.RWMutex
 	sessionSearchRequest      []SearchRequestSessions
+	sessionClientSearch       []ClientSearchSessions
+	FilesDiscovered           map[string]FileSearchChunks //Key the name of file
+	Matches                   bool
+	FilesReadyToDownload      []FileSearchChunks
 	Socket                    *GossiperSocket
 	Rtimer                    int
 	AntiEntropyTimeout        int
@@ -529,6 +533,114 @@ func retrieveIndexOfChunk(chunkHash [32]byte, chunkData []byte, fileInfo *types.
 	return -1
 }
 func searchReplyManagement(message *SearchReply, gossiper *Gossiper) {
+	//TODO: Completar
+	//If it is for me
+	if message.Destination == gossiper.Name {
+		searchResultManagement(message, gossiper)
+	} else {
+		//Route message
+		//If the hop limit has been exceeded
+		if message.HopLimit <= 0 {
+			return
+		}
+		message.HopLimit = message.HopLimit - 1
+
+		//If not send to next hop
+		gossiper.routingTableMutex.RLock()
+		nextHop := gossiper.RoutingTable[message.Destination]
+		gossiper.routingTableMutex.RUnlock()
+		addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
+		packetToSend := &GossipPacket{SearchReply: message}
+		packetBytes, err := protobuf.Encode(packetToSend)
+		if err != nil {
+			panic(err)
+		}
+		gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
+	}
+}
+func searchResultManagement(message *SearchReply, gossiper *Gossiper) {
+
+	//Files the peer has
+	for _, fileResult := range message.Results {
+		//Check if we have information about that file
+		_, exists := gossiper.FilesDiscovered[fileResult.FileName]
+
+		//We already information about it
+		if exists {
+			chunkMapUpdater(gossiper, fileResult, fileResult.ChunkMap, message.Origin)
+		} else {
+			//We dont have information about it
+			ChunkStatus := make([]ChunkStatusStruct, fileResult.ChunkCount)
+			//ChunkStatus := make(ChunkStatusStruct, len(fileResult.ChunkCount))
+			gossiper.FilesDiscovered[fileResult.FileName] = FileSearchChunks{
+				FileName:     fileResult.FileName,
+				ChunkCount:   fileResult.ChunkCount,
+				MetafileHash: fileResult.MetafileHash,
+				ChunkStatus:  ChunkStatus,
+			}
+			chunkMapUpdater(gossiper, fileResult, fileResult.ChunkMap, message.Origin)
+		}
+
+		fmt.Println("FOUND match " + fileResult.FileName + " at " + message.Origin + " chunks=" + arrayToString(fileResult.ChunkMap, ","))
+	}
+	//Check if we have any match (file completely available)
+	totalMatches := checkIfFileMatches(gossiper)
+	//Two or more matches, stop search
+	if totalMatches > 1 {
+		//Stop search
+		//Restart the matches
+		gossiper.Matches = false
+		//Delete sessions
+		for index := range gossiper.sessionClientSearch {
+			gossiper.sessionClientSearch = append(gossiper.sessionClientSearch[:index], gossiper.sessionClientSearch[index+1:]...)
+		}
+		gossiper.FilesDiscovered = nil
+		//Enf of search
+		fmt.Println("SEARCH FINISHED")
+	}
+}
+func arrayToString(a []uint64, delim string) string {
+	return strings.Trim(strings.Replace(fmt.Sprint(a), " ", delim, -1), "[]")
+	//return strings.Trim(strings.Join(strings.Split(fmt.Sprint(a), " "), delim), "[]")
+	//return strings.Trim(strings.Join(strings.Fields(fmt.Sprint(a)), delim), "[]")
+}
+func chunkMapUpdater(gossiper *Gossiper, fileResult *types.SearchResult, peerChunks []uint64, owner string) {
+	chunkStatus := gossiper.FilesDiscovered[fileResult.FileName].ChunkStatus
+	for _, chunk := range peerChunks {
+		chunkInfo := chunkStatus[chunk]
+		//If we dont have info about that chunk
+		chunkInfo.Owners = append(chunkInfo.Owners, owner)
+	}
+
+}
+func checkIfFileMatches(gossiper *Gossiper) int {
+	totalMatches := 0
+	for _, fileInfo := range gossiper.FilesDiscovered {
+		chunkCount := 0
+
+		for _, chunkInfo := range fileInfo.ChunkStatus {
+			//We know someone that has the chunk
+			if len(chunkInfo.Owners) > 0 {
+				chunkCount++
+			}
+		}
+		//We can download the file, we have a match
+		if chunkCount == int(fileInfo.ChunkCount) {
+			totalMatches++
+			alreadyMatched := false
+			for _, file := range gossiper.FilesReadyToDownload {
+				if bytes.Equal(file.MetafileHash, fileInfo.MetafileHash) {
+					alreadyMatched = true
+				}
+			}
+			//We only save it if we havent saved it before
+			if !alreadyMatched {
+				gossiper.FilesReadyToDownload = append(gossiper.FilesReadyToDownload, fileInfo)
+			}
+
+		}
+	}
+	return totalMatches
 }
 func fileDataReplyManagement(message *DataReply, gossiper *Gossiper) {
 
@@ -564,7 +676,7 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 	//If this is not done instead of saving the value it saves a reference
 	data := make([]byte, len(message.Data))
 	copy(data, message.Data)
-	origin := message.Origin
+	//origin := message.Origin
 	sha256fDataAux := sha256.Sum256(data)
 	sha256fData := sha256fDataAux[:]
 	//Find the session
@@ -605,6 +717,11 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			}
 
 			//We are going to ask for the first chunk
+
+			//To manage downloads after search
+			if session.DestinationSearch != nil {
+				session.Destination = session.DestinationSearch[0]
+			}
 			gossiper.filesBeingDownloadedMutex.Lock()
 			gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 				PathToSave:        session.PathToSave,
@@ -615,10 +732,11 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 				LastHashRequested: session.ChunkInformation[0].ChunkHash,
 				ChunkInformation:  session.ChunkInformation,
 				Destination:       session.Destination,
+				DestinationSearch: session.DestinationSearch,
 			}
 			gossiper.filesBeingDownloadedMutex.Unlock()
 			dataRequest := &DataRequest{
-				Destination: origin,
+				Destination: session.Destination,
 				HopLimit:    10,
 				Origin:      gossiper.Name,
 				HashValue:   session.ChunkInformation[0].ChunkHash,
@@ -654,6 +772,11 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 			//If we do
 			if (positionLastChunkReceived+1 < len(session.ChunkInformation)) && (session.ChunkInformation[positionLastChunkReceived+1].ChunkData) == nil {
 				//Request next chunk
+
+				//To manage downloads after search
+				if session.DestinationSearch != nil {
+					session.Destination = session.DestinationSearch[positionLastChunkReceived+1]
+				}
 				gossiper.filesBeingDownloadedMutex.Lock()
 				gossiper.FilesBeingDownloaded[index] = &DownloadInfo{
 					PathToSave:        session.PathToSave,
@@ -664,10 +787,11 @@ func dataDownloadManagement(message *DataReply, gossiper *Gossiper) {
 					LastHashRequested: session.ChunkInformation[positionLastChunkReceived+1].ChunkHash,
 					ChunkInformation:  session.ChunkInformation,
 					Destination:       session.Destination,
+					DestinationSearch: session.DestinationSearch,
 				}
 				gossiper.filesBeingDownloadedMutex.Unlock()
 				dataRequest := &DataRequest{
-					Destination: origin,
+					Destination: session.Destination,
 					HopLimit:    10,
 					Origin:      gossiper.Name,
 					HashValue:   session.ChunkInformation[positionLastChunkReceived+1].ChunkHash,
@@ -828,6 +952,11 @@ func listenUISocketNotSimple(UISocket *GossiperSocket, gossiper *Gossiper) {
 			privateMessageCreation(packet, gossiper)
 			continue
 		}
+		//File Search
+		if packet.Keywords != nil {
+			fileSearchCreation(packet, gossiper)
+			continue
+		}
 		//Normal message
 		gossiper.wantMutex.Lock()
 
@@ -954,8 +1083,7 @@ func packetType(packet GossipPacket) int {
 	return -1
 }
 func nextHopManagement(message *RumorMessage, peerTalking string, gossiper *Gossiper) {
-	//TODO: Ask if we should update it if the ID is higher than expected, at the moment it does so
-	//TODO: Ask what no output of DSDV messages mean, do we refresh the table without printing?
+
 	origin := message.Origin
 	// We take the last message of the peer and check the ID
 
@@ -1028,6 +1156,108 @@ func nextHopManagement(message *RumorMessage, peerTalking string, gossiper *Goss
 			}
 			return
 		}*/
+}
+func fileSearchSendFromClient(clientMessage *Message, gossiper *Gossiper) {
+
+	splitterKeywrods := strings.Split(*clientMessage.Keywords, ",")
+	searchOfClient := &SearchRequest{
+		Budget:   *clientMessage.Budget,
+		Origin:   gossiper.Name,
+		Keywords: splitterKeywrods,
+	}
+	//Create new session of requestReceived (to then check if duplicated)
+	newSession := SearchRequestSessions{
+		SearchRequest: searchOfClient,
+		TimeElapsed:   500, //In millisenconds
+	}
+	gossiper.sessionSearchRequest = append(gossiper.sessionSearchRequest, newSession)
+	searchRequestRedistributer(searchOfClient, gossiper)
+}
+func fileSearchCreation(clientMessage *Message, gossiper *Gossiper) {
+	if clientMessage.Budget == nil {
+		*clientMessage.Budget = 2
+		//We only have to increment budget if budget was not specified
+
+		//Creation of the session
+		newSession := ClientSearchSessions{
+			ClientMessage: clientMessage,
+			TimeElapsed:   1000, //In millisenconds, so 1 second
+		}
+		gossiper.sessionClientSearch = append(gossiper.sessionClientSearch, newSession)
+	}
+
+	//Send a SearchRequest
+	fileSearchSendFromClient(clientMessage, gossiper)
+}
+func budgetChecker(index int, sessionClientSearch ClientSearchSessions, gossiper *Gossiper) {
+	//TODO: Check also the threshold
+	if *sessionClientSearch.ClientMessage.Budget*2 < 32 /*|| gossiper.Matches*/ {
+		*sessionClientSearch.ClientMessage.Budget = *sessionClientSearch.ClientMessage.Budget * 2
+		sessionClientSearch.TimeElapsed = 1000
+		fileSearchSendFromClient(sessionClientSearch.ClientMessage, gossiper)
+	} else {
+		//Stop the resending
+		//Restart the matches
+		gossiper.Matches = false
+		//Delete session
+		gossiper.FilesDiscovered = nil
+		return
+	}
+}
+func downloadFileWeHaveFound(fileSelected int, gossiper *Gossiper) {
+	selectedFile := gossiper.FilesReadyToDownload[fileSelected]
+
+	var arrayRandomOwners []string
+	for _, chunk := range selectedFile.ChunkStatus {
+		randomOwner := getRandomOwnerOfChunk(chunk)
+		arrayRandomOwners = append(arrayRandomOwners, randomOwner)
+	}
+	//Open sesion of download
+	gossiper.filesBeingDownloadedMutex.Lock()
+	gossiper.FilesBeingDownloaded = append(gossiper.FilesBeingDownloaded, &DownloadInfo{
+		FileName:          selectedFile.FileName,
+		PathToSave:        filepath.Join(Downloads, selectedFile.FileName),
+		Timeout:           5,
+		LastHashRequested: selectedFile.MetafileHash,
+		MetaHash:          selectedFile.MetafileHash,
+		Destination:       arrayRandomOwners[0],
+		DestinationSearch: arrayRandomOwners,
+	})
+	gossiper.filesBeingDownloadedMutex.Unlock()
+
+	//TODO: Send first packet request
+	message := &DataRequest{
+		Origin:      gossiper.Name,
+		Destination: arrayRandomOwners[0],
+		HashValue:   selectedFile.MetafileHash,
+		HopLimit:    10,
+	}
+	//If the hop limit has been exceeded
+	if message.HopLimit <= 0 {
+		return
+	}
+	//Just to check the message is not going to us
+	if message.Destination != gossiper.Name {
+		message.HopLimit = message.HopLimit - 1
+	}
+
+	gossiper.routingTableMutex.RLock()
+	nextHop := gossiper.RoutingTable[message.Destination]
+	gossiper.routingTableMutex.RUnlock()
+	addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
+	packetToSend := &GossipPacket{DataRequest: message}
+	packetBytes, err := protobuf.Encode(packetToSend)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("DOWNLOADING metafile of " + selectedFile.FileName + " from " + message.Destination)
+	gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
+}
+func getRandomOwnerOfChunk(chunk ChunkStatusStruct) string {
+
+	randomIndexOfOwner := rand.Int() % len(chunk.Owners)
+	selectedOwner := chunk.Owners[randomIndexOfOwner]
+	return selectedOwner
 }
 func privateMessageCreation(clientMessage *Message, gossiper *Gossiper) {
 	privateMessage := &PrivateMessage{
@@ -1459,6 +1689,23 @@ func timeoutOfSearchRequest(gossiper *Gossiper) {
 	}
 
 }
+func budgetIncreaser(gossiper *Gossiper) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	//TODO: Change everything to increse budget
+	for range ticker.C {
+		for index, sessionClientSearch := range gossiper.sessionClientSearch {
+			if sessionClientSearch.TimeElapsed <= 0 {
+				//TODO: Call a function to increase the budget if necessay
+				budgetChecker(index, sessionClientSearch, gossiper)
+				//gossiper.sessionClientSearch = append(gossiper.sessionClientSearch[:index], gossiper.sessionClientSearch[index+1:]...)
+			} else {
+				//Decrement sessions in 10 of millisecond
+				sessionClientSearch.TimeElapsed = sessionClientSearch.TimeElapsed - 10
+			}
+		}
+
+	}
+}
 func timeoutOfDownload(gossiper *Gossiper) {
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
@@ -1544,6 +1791,7 @@ func main() {
 		go timeoutOfSearchRequest(gossiper)
 		go timeoutOfDownload(gossiper)
 		go listenAPISocket(gossiper)
+		go budgetIncreaser(gossiper)
 
 		listenSocketNotSimple(socket, gossiper)
 

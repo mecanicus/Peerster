@@ -20,6 +20,8 @@ type Message struct {
 	Destination *string
 	File        *string
 	Request     *[]byte
+	Budget      *uint64
+	Keywords    *string
 }
 type FileInfo struct {
 	FileSize       int64
@@ -36,6 +38,7 @@ type DownloadInfo struct {
 	LastHashRequested []byte        //Last hash that has been requested
 	ChunkInformation  []ChunkStruct //Where all the chunk's info is stored (hashes/data)
 	Destination       string        //Used in case of failed download to know who to repeat the request
+	DestinationSearch []string      //Used in case of downloading from search request as different people has the chunks
 }
 type SearchRequest struct {
 	Origin   string
@@ -44,6 +47,10 @@ type SearchRequest struct {
 }
 type SearchRequestSessions struct {
 	SearchRequest *SearchRequest
+	TimeElapsed   int
+}
+type ClientSearchSessions struct {
+	ClientMessage *Message
 	TimeElapsed   int
 }
 type SearchReply struct {
@@ -58,7 +65,15 @@ type SearchResult struct {
 	ChunkMap     []uint64
 	ChunkCount   uint64
 }
-
+type FileSearchChunks struct {
+	FileName     string
+	MetafileHash []byte
+	ChunkCount   uint64
+	ChunkStatus  []ChunkStatusStruct
+}
+type ChunkStatusStruct struct {
+	Owners []string //Array of peers that has it
+}
 type ChunkStruct struct {
 	ChunkHash []byte
 	ChunkData []byte
