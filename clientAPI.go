@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 
 	"github.com/dedis/protobuf"
 	. "github.com/mecanicus/Peerster/types"
@@ -202,7 +203,71 @@ func (gossiper *Gossiper) messagesHandler(w http.ResponseWriter, r *http.Request
 
 	}
 }
+func (gossiper *Gossiper) filesReadyToDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		//Send the available files to download
+		var availableFiles []string
+		for _, files := range gossiper.FilesReadyToDownload {
+			availableFiles = append(availableFiles, files.FileName)
+		}
+		//testing
+		if len(availableFiles) > 0 {
+			fmt.Println(availableFiles)
+		}
 
+		js, _ := json.Marshal(availableFiles)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+	if r.Method == "POST" {
+		fileName2 := r.FormValue("fileSelected")
+		for numberFileSelected, fileName := range gossiper.FilesReadyToDownload {
+			if fileName.FileName == fileName2 {
+				downloadFileWeHaveFound(numberFileSelected, gossiper)
+				js, _ := json.Marshal("Saved")
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(js)
+			}
+		}
+
+	}
+}
+func (gossiper *Gossiper) startSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		keywords := r.FormValue("keywords")
+		budgetAux := r.FormValue("budget")
+		budget2, _ := strconv.Atoi(budgetAux)
+		budget := uint64(budget2)
+		clientMessage := &Message{
+			Budget:   &budget,
+			Keywords: &keywords,
+		}
+		if clientMessage.Budget == nil {
+			budgetAux := uint64(2)
+			clientMessage = &Message{
+				Keywords: clientMessage.Keywords,
+				Budget:   &budgetAux,
+			}
+			//We only have to increment budget if budget was not specified
+
+			//Creation of the session
+			newSession := ClientSearchSessions{
+				ClientMessage: clientMessage,
+				TimeElapsed:   1000, //In millisenconds, so 1 second
+			}
+			gossiper.sessionClientSearch = append(gossiper.sessionClientSearch, newSession)
+		}
+
+		//Send a SearchRequest
+		fileSearchSendFromClient(clientMessage, gossiper)
+		js, _ := json.Marshal("Saved")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(js)
+	}
+}
 func listenAPISocket(gossiper *Gossiper) {
 
 	http.Handle("/", http.FileServer(http.Dir("./static")))
@@ -213,6 +278,8 @@ func listenAPISocket(gossiper *Gossiper) {
 	http.HandleFunc("/fileUpload", gossiper.filesUploadHandler)
 	http.HandleFunc("/requestFile", gossiper.requestFileHandler)
 	http.HandleFunc("/listNodes", gossiper.listNodesHandler)
+	http.HandleFunc("/filesReadyToDownload", gossiper.filesReadyToDownload)
+	http.HandleFunc("/startSearch", gossiper.startSearch)
 
 	http.ListenAndServe(":8080", nil)
 

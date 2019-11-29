@@ -11,6 +11,8 @@ const (
 	FileReply      int = 6
 	SearchRequestM int = 7
 	SearchReplyM   int = 8
+	TLCMessageM    int = 9
+	AckTLCM        int = 10
 )
 const SharedFiles string = "_SharedFiles"
 const Downloads string = "_Downloads"
@@ -91,6 +93,26 @@ type DataReply struct {
 	HashValue   []byte
 	Data        []byte
 }
+type TxPublish struct {
+	Name         string
+	Size         int64 // Size in bytes
+	MetafileHash []byte
+}
+type BlockPublish struct {
+	PrevHash    [32]byte //(used in Exercise 4, for now 0)
+	Transaction TxPublish
+}
+type TLCMessage struct {
+	Origin      string
+	ID          uint32
+	Confirmed   bool
+	TxBlock     BlockPublish
+	VectorClock *StatusPacket //(used in Exercise 3, for now nil)
+	Fitness     float32       //(used in Exercise 4, for now 0)
+}
+
+type TLCAck PrivateMessage
+
 type SimpleMessage struct {
 	OriginalName  string
 	RelayPeerAddr string
@@ -102,11 +124,11 @@ type RumorMessage struct {
 	Text   string
 }
 type PrivateMessage struct {
-	Origin      string
-	ID          uint32
-	Text        string
-	Destination string
-	HopLimit    uint32
+	Origin      string // peer acking the msg
+	ID          uint32 // the same ID as the acked TLCMessage
+	Text        string // can be empty
+	Destination string // the source of the acked TLCMessage
+	HopLimit    uint32 // default 10, otherwise -hopLimit flag
 }
 type PeerStatus struct {
 	Identifier string
@@ -115,6 +137,12 @@ type PeerStatus struct {
 type ConectionInfo struct {
 	MessageToGossip *RumorMessage
 	Timeout         int //Tambien se podria meter aqui un timer
+	MessageTLC      *TLCMessage
+}
+type TLCMensInfo struct {
+	TLCMessage TLCMessage
+	Timeout    int
+	AmountACK  map[string]bool //Key the peer ACKing, value if acked or not
 }
 type StatusPacket struct {
 	Want []PeerStatus
@@ -133,6 +161,8 @@ type GossipPacket struct {
 	DataReply     *DataReply
 	SearchRequest *SearchRequest
 	SearchReply   *SearchReply
+	TLCMessage    *TLCMessage
+	Ack           *TLCAck
 }
 
 type UDPAddr struct {

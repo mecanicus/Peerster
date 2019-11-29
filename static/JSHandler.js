@@ -69,6 +69,17 @@ $(document).ready(function() {
         }
     });
 });
+$(document).ready(function() {
+    $("#selectFiles").on("change", function() {
+        console.log($(this).val())
+        if ($(this).val() === "None") {
+            $("#label3").hide();
+        }
+        else {
+            $("#label3").show();
+        }
+    });
+});
 function getID(){
     $.ajax({
         type: "GET",
@@ -80,6 +91,46 @@ function getID(){
     })
     .fail(function( jqXHR, textStatus, errorThrown ) {
         console.log( "Fail: " +  textStatus);
+    });
+}
+function getListAvailableFiles(){
+
+    $.ajax({
+        type: "GET",
+        dataType: "json",
+        url: "http://localhost:8080/filesReadyToDownload",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+        console.log(data)
+        console.log(data[0])
+        $.each(data, function(i, p) {
+            var exists = $("#selectFiles option")
+               .filter(function (i, o) { return o.value === p; })
+               .length > 0;
+            //console.log($(exists))
+            if(!exists){
+                $('#selectFiles').append($('<option></option>').val(p).html(p));
+            }
+        });
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail: " +  textStatus);
+    });
+}
+function requestDiscoveredFile(){
+    fileSelected = $('#selectFiles').find(":selected").text();
+    //console.log(newNode)
+    $.ajax({
+        data: {"fileSelected" : fileSelected},
+        type: "POST",
+        dataType: "json",
+        url: "http://localhost:8080/filesReadyToDownload",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+		//console.log(selectedNode)
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
     });
 }
 function requestFile(){
@@ -217,12 +268,14 @@ function getEverything(){
     getNodesList()
     getOriginsList()
     getPrivateMessages()
+    getListAvailableFiles()
 }
 function getMessagesAndNodesAndOrigins(){
     getMessagesList()
     getNodesList()
     getOriginsList()
     getPrivateMessages()
+    getListAvailableFiles()
 }
 $(document).ready(function () {
     getEverything()
