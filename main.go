@@ -465,14 +465,17 @@ func remove(s []string, r string) []string {
 	return s
 }
 func searchRequestRedistributer(message *SearchRequest, gossiper *Gossiper) {
-	var validKnownPeers []string
+	/*var validKnownPeers []string
 	for name := range gossiper.RoutingTable {
 		validKnownPeers = append(validKnownPeers, name)
-	}
+	}*/
+	validKnownPeers := make([]string, len(gossiper.KnownPeers))
+	copy(validKnownPeers, gossiper.KnownPeers)
+	//validKnownPeers := gossiper.KnownPeers
 
 	//We remove of the possible receivers ourself and the original sender
 	validKnownPeers = remove(validKnownPeers, message.Origin)
-	validKnownPeers = remove(validKnownPeers, gossiper.Name)
+	//validKnownPeers = remove(validKnownPeers, gossiper.Name)
 	numberOfPeers := len(validKnownPeers)
 	if numberOfPeers == 0 {
 		return
@@ -495,15 +498,14 @@ func searchRequestRedistributer(message *SearchRequest, gossiper *Gossiper) {
 			fmt.Println("peer: " + peerToRedirectSearch)
 			fmt.Println("budget: ", budgetPerPeer+extra)
 			//Delete him of possible peers to send message
+			fmt.Printf("%+v\n", possiblePeersToSend)
 			possiblePeersToSend = append(possiblePeersToSend[:randomIndexOfPeer], possiblePeersToSend[randomIndexOfPeer+1:]...)
+			//possiblePeersToSend = remove(possiblePeersToSend, peerToRedirectSearch)
 			message.Budget = uint64(budgetPerPeer + extra)
 			//We redirect the message to the selected neighbor
 			packetToSend := &GossipPacket{SearchRequest: message}
 			packetBytes, _ := protobuf.Encode(packetToSend)
-			gossiper.routingTableMutex.RLock()
-			nextHop := gossiper.RoutingTable[peerToRedirectSearch]
-			gossiper.routingTableMutex.RUnlock()
-			choosenPeerAddress, _ := net.ResolveUDPAddr("udp", nextHop)
+			choosenPeerAddress, _ := net.ResolveUDPAddr("udp", peerToRedirectSearch)
 			gossiper.Socket.Conn.WriteToUDP(packetBytes, choosenPeerAddress)
 		} else {
 			//If not we dont have more budget
@@ -561,7 +563,7 @@ func checkIfHaveFile(message *SearchRequest, gossiper *Gossiper) bool {
 				sort.Ints(chunkMap)
 				var chunkMapUint64 []uint64
 				for chunk := range chunkMap {
-					chunkMapUint64 = append(chunkMapUint64, uint64(chunk))
+					chunkMapUint64 = append(chunkMapUint64, uint64(chunk+1))
 				}
 				oneSearchResult := &SearchResult{
 					FileName:     fileName,
@@ -569,6 +571,7 @@ func checkIfHaveFile(message *SearchRequest, gossiper *Gossiper) bool {
 					ChunkMap:     chunkMapUint64,
 					ChunkCount:   uint64(len(fileInfo.HashesOfChunks)),
 				}
+				fmt.Println("Sending search reply:")
 				fmt.Printf("%+v\n", oneSearchResult)
 				filesResult = append(filesResult, oneSearchResult)
 			}
@@ -686,6 +689,9 @@ func searchResultManagement(message *SearchReply, gossiper *Gossiper) {
 	}
 }
 func arrayToString(a []uint64, delim string) string {
+	/*for index, value := range a {
+		a[index] = value + uint64(1)
+	}*/
 	return strings.Trim(strings.Replace(fmt.Sprint(a), " ", delim, -1), "[]")
 	//return strings.Trim(strings.Join(strings.Split(fmt.Sprint(a), " "), delim), "[]")
 	//return strings.Trim(strings.Join(strings.Fields(fmt.Sprint(a)), delim), "[]")
@@ -693,17 +699,38 @@ func arrayToString(a []uint64, delim string) string {
 func chunkMapUpdater(gossiper *Gossiper, fileResult *types.SearchResult, peerChunks []uint64, owner string) {
 
 	for _, chunk := range peerChunks {
-		chunkInfo := gossiper.FilesDiscovered[fileResult.FileName].ChunkStatus[chunk]
+		chunkInfo := gossiper.FilesDiscovered[fileResult.FileName].ChunkStatus[chunk-1]
 		//If we dont have info about that chunk
 		chunkInfo.Owners = append(chunkInfo.Owners, owner)
-		gossiper.FilesDiscovered[fileResult.FileName].ChunkStatus[chunk] = chunkInfo
+		gossiper.FilesDiscovered[fileResult.FileName].ChunkStatus[chunk-1] = chunkInfo
 	}
 	//TODO: Salvar todo
 
 }
 func checkIfFileMatches(gossiper *Gossiper) int {
 	totalMatches := 0
-	for _, fileInfo := range gossiper.FilesDiscovered {
+	var arrayOfHashes [][]byte
+	filesDiscovered := gossiper.FilesDiscovered
+	for index, fileInfo := range filesDiscovered {
+		var checker bool
+		for _, hashes := range arrayOfHashes {
+			//Lo borro
+			if bytes.Equal(hashes, fileInfo.MetafileHash) {
+				delete(filesDiscovered, index)
+				checker = true
+				break
+			} else {
+				//No coincidencia, seguro para salvarlo
+				checker = false
+			}
+		}
+		if checker == false {
+			arrayOfHashes = append(arrayOfHashes, fileInfo.MetafileHash)
+		}
+
+	}
+
+	for _, fileInfo := range filesDiscovered {
 		chunkCount := 0
 
 		for _, chunkInfo := range fileInfo.ChunkStatus {
