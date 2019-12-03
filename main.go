@@ -61,6 +61,7 @@ type Gossiper struct {
 	HopLimit                  uint32
 	MyRound                   uint32
 	ackAll                    bool
+	hasSendClientTLC          bool
 }
 
 func flagReader() (*string, *string, *bool, *int, *string, *int, *int, *bool, *int, *int, *uint32, *bool, *bool) {
@@ -79,6 +80,9 @@ func flagReader() (*string, *string, *bool, *int, *string, *int, *int, *bool, *i
 	ackAll := flag.Bool("ackAll", false, "ACK everything without checks")
 	flag.Parse()
 	hopLimit2 := uint32(*hopLimit)
+	if *hw3ex3 == true {
+		*hw3ex2 = true
+	}
 	return gossipAddr, gossiperName, gossiperMode, uiPort, peersList, antiEntropyTimeout, rtimer, hw3ex2, N, stubbornTimeout, &hopLimit2, hw3ex3, ackAll
 }
 
@@ -276,8 +280,8 @@ func processPacket(buf []byte, sender *net.UDPAddr, gossiper *Gossiper) {
 		// fmt.Printf("%+v\n", gossiper.Want)
 		//We always answer with an ACK if not Hwex3
 		if gossiper.Hw3ex3 && gossiper.ackAll == false {
-			//Only ack if newer
-			if message.ID >= gossiper.MyRound {
+			//Only ack if in correct round
+			if len(gossiper.savedTLCMessages[message.Origin]) >= int(gossiper.MyRound) {
 				returnACKManagement(message, gossiper)
 			}
 		} else {
@@ -287,7 +291,9 @@ func processPacket(buf []byte, sender *net.UDPAddr, gossiper *Gossiper) {
 
 		if checkingIfTLCExpectedMessageAndSave(message, peerTalking, gossiper) == true {
 			//Start rumor process but with TCL message
-			sendTLCMessageFromClient(message, gossiper)
+			// sendTLCMessageFromClient(message, gossiper)
+			choosenPeer := choseRandomPeerAndSendTLCPackage(message, gossiper)
+			connectionCreationRumorMessage(choosenPeer, nil, message, gossiper)
 			//Send the typical status message in this case for TLC
 			//Mandar un mensaje de status de vuelta (todo ok)
 			createNewStatusPackageAndSend(sender, gossiper)
@@ -301,11 +307,16 @@ func processPacket(buf []byte, sender *net.UDPAddr, gossiper *Gossiper) {
 			}
 		}
 	case AckTLCM:
+
 		message := packet.Ack
+		// fmt.Println("ACK de", message.Origin)
+		// fmt.Printf("%+v\n", gossiper.savedTLCMessages)
 		tCLAckManagement(message, gossiper)
 		if gossiper.Hw3ex3 {
 			myTimeChecker(gossiper)
 		}
+		// fmt.Println("------------------------------")
+		// fmt.Printf("%+v\n", gossiper.savedTLCMessages)
 	}
 }
 
@@ -1205,7 +1216,29 @@ func calculateMetaHash(fileToBeChunked string, hashesOfChunks [][32]byte, fileSi
 			Fitness:   0, //(used in Exercise 4, for now 0)
 
 		}
-		sendTLCMessageFromClient(tlcMessage, gossiper)
+		if gossiper.Hw3ex3 == true {
+			//In hw3 check if we have send another file
+			//If first file of history just send it
+			if len(gossiper.savedTLCMessages[gossiper.Name]) == 0 {
+				gossiper.hasSendClientTLC = true
+				sendTLCMessageFromClient(tlcMessage, gossiper)
+				return nil
+			}
+			//If more files
+			fmt.Println("has enviado", gossiper.hasSendClientTLC)
+			fmt.Println("long", len(gossiper.savedTLCMessages[gossiper.Name]))
+			fmt.Println("round", gossiper.MyRound)
+			if gossiper.hasSendClientTLC == false {
+				gossiper.hasSendClientTLC = true
+				sendTLCMessageFromClient(tlcMessage, gossiper)
+				return nil
+
+			}
+
+		} else {
+			//If we are in hw2 create it
+			sendTLCMessageFromClient(tlcMessage, gossiper)
+		}
 	}
 	/*a := sha256.Sum256(dataOfMetahashBytes)
 	b := a[:]
@@ -1222,69 +1255,96 @@ func updateIndexTLC(gossiper *Gossiper) uint32 {
 }
 func tCLAckManagement(message *TLCAck, gossiper *Gossiper) {
 	//If an ack is reveived is because the TLC message is mine
-	var messageACKed TLCMensInfo
-	var indexFound int
-	var found bool
-	// fmt.Println("longitud", len(gossiper.savedTLCMessages[gossiper.Name]))
-	for index, TLCmessage := range gossiper.savedTLCMessages[gossiper.Name] {
-		// fmt.Printf("%+v\n", gossiper.savedTLCMessages[gossiper.Name][0])
-		// fmt.Println(TLCmessage.TLCMessage.ID)
-		// fmt.Println(message.ID)
-		//Retrieve the message he is acking
-		if (TLCmessage.TLCMessage.ID == message.ID) && (TLCmessage.StopAcking == false) {
-			messageACKed = TLCmessage
-			indexFound = index
-			found = true
-		}
-	}
-	if found == false {
-		return
-	}
-	_, exists := messageACKed.AmountACK[message.Origin]
-	//If he has not acked yet
-	if !exists {
-		messageACKed.AmountACK[message.Origin] = true
-	}
-	var Nacked int
-	for _, acked := range messageACKed.AmountACK {
-		if acked == true {
-			Nacked++
-		}
-	}
-	//You count yourself
-	if Nacked+1 > gossiper.N/2 {
-		//We have a consensus
-		//We put in confirmed the ID
-		newMessageAux := TLCMessage{
-			Confirmed:   int(messageACKed.TLCMessage.ID),
-			Fitness:     messageACKed.TLCMessage.Fitness,
-			ID:          updateIndexTLC(gossiper),
-			Origin:      messageACKed.TLCMessage.Origin,
-			TxBlock:     messageACKed.TLCMessage.TxBlock,
-			VectorClock: messageACKed.TLCMessage.VectorClock,
-		}
-		newMessageInfo := TLCMensInfo{
-			StopAcking: false,
-			TLCMessage: newMessageAux,
-			Timeout:    5,
-			AmountACK:  make(map[string]bool),
-		}
-		messageACKed.StopAcking = true
-		// messageACKed.TLCMessage.ID = updateIndexTLC(gossiper)
-		// messageACKed.TLCMessage.Confirmed = int(messageACKed.TLCMessage.ID)
-		gossiper.savedTLCMessages[gossiper.Name][indexFound] = messageACKed
-		gossiper.savedTLCMessages[gossiper.Name] = append(gossiper.savedTLCMessages[gossiper.Name], newMessageInfo)
-		var auxString string
-
-		for peerThatAcked, acked := range messageACKed.AmountACK {
-			if acked == true {
-				auxString += peerThatAcked + ","
+	if message.Destination == gossiper.Name {
+		var messageACKed TLCMensInfo
+		var indexFound int
+		var found bool
+		// fmt.Println("longitud", len(gossiper.savedTLCMessages[gossiper.Name]))
+		for index, TLCmessage := range gossiper.savedTLCMessages[gossiper.Name] {
+			// fmt.Printf("%+v\n", gossiper.savedTLCMessages[gossiper.Name][0])
+			// fmt.Println(TLCmessage.TLCMessage.ID)
+			// fmt.Println(message.ID)
+			//Retrieve the message he is acking
+			if (TLCmessage.TLCMessage.ID == message.ID) && (TLCmessage.StopAcking == false) {
+				messageACKed = TLCmessage
+				indexFound = index
+				found = true
 			}
 		}
-		auxString = auxString[:len(auxString)-1]
-		fmt.Println("RE-BROADCAST ID " + strconv.FormatUint(uint64(newMessageAux.ID), 10) + " WITNESSES " + auxString)
-		sendTLCMessageFromClient(&newMessageInfo.TLCMessage, gossiper)
+		if found == false {
+			return
+		}
+		_, exists := messageACKed.AmountACK[message.Origin]
+		//If he has not acked yet
+		if !exists {
+			messageACKed.AmountACK[message.Origin] = true
+			gossiper.savedTLCMessages[gossiper.Name][indexFound] = messageACKed
+		}
+		var Nacked int
+		for _, acked := range messageACKed.AmountACK {
+			if acked == true {
+				Nacked++
+			}
+		}
+		//You count yourself
+		if Nacked+1 > gossiper.N/2 {
+			//We have a consensus
+			//We put in confirmed the ID
+			newMessageAux := TLCMessage{
+				Confirmed:   int(messageACKed.TLCMessage.ID),
+				Fitness:     messageACKed.TLCMessage.Fitness,
+				ID:          updateIndexTLC(gossiper),
+				Origin:      messageACKed.TLCMessage.Origin,
+				TxBlock:     messageACKed.TLCMessage.TxBlock,
+				VectorClock: messageACKed.TLCMessage.VectorClock,
+			}
+			newMessageInfo := TLCMensInfo{
+				StopAcking: false,
+				TLCMessage: newMessageAux,
+				Timeout:    5,
+				AmountACK:  make(map[string]bool),
+			}
+			messageACKed.StopAcking = true
+			// messageACKed.TLCMessage.ID = updateIndexTLC(gossiper)
+			// messageACKed.TLCMessage.Confirmed = int(messageACKed.TLCMessage.ID)
+			gossiper.savedTLCMessages[gossiper.Name][indexFound] = messageACKed
+			gossiper.savedTLCMessages[gossiper.Name] = append(gossiper.savedTLCMessages[gossiper.Name], newMessageInfo)
+			var auxString string
+
+			for peerThatAcked, acked := range messageACKed.AmountACK {
+				if acked == true {
+					auxString += peerThatAcked + ","
+				}
+			}
+			auxString = auxString[:len(auxString)-1]
+			fmt.Println("RE-BROADCAST ID " + strconv.FormatUint(uint64(newMessageAux.ID), 10) + " WITNESSES " + auxString)
+			// sendTLCMessageFromClient(&newMessageInfo.TLCMessage, gossiper)
+			choosenPeer := choseRandomPeerAndSendTLCPackage(&newMessageInfo.TLCMessage, gossiper)
+			connectionCreationRumorMessage(choosenPeer, nil, &newMessageInfo.TLCMessage, gossiper)
+		}
+	} else {
+
+		//If the hop limit has been exceeded
+		if message.HopLimit <= 0 {
+			return
+		}
+		message.HopLimit = message.HopLimit - 1
+
+		//If not send to next hop
+		gossiper.routingTableMutex.RLock()
+		nextHop := gossiper.RoutingTable[message.Destination]
+		gossiper.routingTableMutex.RUnlock()
+		addressNextHop, _ := net.ResolveUDPAddr("udp", nextHop)
+		packetToSend := &GossipPacket{Ack: message}
+		packetBytes, err := protobuf.Encode(packetToSend)
+		if err != nil {
+			panic(err)
+		}
+		gossiper.Socket.Conn.WriteToUDP(packetBytes, addressNextHop)
 	}
+
+}
+func roundChecker(message *TLCMessage, gossiper *Gossiper) {
 
 }
 func returnACKManagement(message *TLCMessage, gossiper *Gossiper) {
@@ -1299,7 +1359,7 @@ func returnACKManagement(message *TLCMessage, gossiper *Gossiper) {
 				ID:          message.ID,
 				Origin:      gossiper.Name,
 			}
-			fmt.Println("SENDING ACK origin " + gossiper.Name + " ID " + strconv.FormatInt(int64(message.ID), 10))
+			fmt.Println("SENDING ACK origin " + message.Origin + " ID " + strconv.FormatInt(int64(message.ID), 10))
 			//If the hop limit has been exceeded
 			if packetToSend.HopLimit <= 0 {
 				return
@@ -1810,7 +1870,7 @@ func checkingIfTLCExpectedMessageAndSave(message *TLCMessage, peerTalking string
 						TLCMessage: *message,
 						Timeout:    5,
 						AmountACK:  make(map[string]bool),
-						StopAcking: true,
+						StopAcking: false,
 					}
 				} else {
 					messageToSave = TLCMensInfo{
@@ -1837,39 +1897,67 @@ func checkingIfTLCExpectedMessageAndSave(message *TLCMessage, peerTalking string
 }
 func myTimeChecker(gossiper *Gossiper) {
 	var ownCheck = false
-	var checkMajority int
+	var checkMajority int = 0
 	var ownMessageConfirmed bool = false
 	var majority bool = false
 	var confirmedValidMessages []TLCMessage
+	// fmt.Printf("%+v\n", gossiper.savedTLCMessages)
 	for _, ArrayTLCInfo := range gossiper.savedTLCMessages {
-		for _, TLCInfoOfPeer := range ArrayTLCInfo {
+		for index, TLCInfoOfPeer := range ArrayTLCInfo {
 			tlcMessageOfPeer := TLCInfoOfPeer.TLCMessage
+			//Do not count ourself
+			if tlcMessageOfPeer.Origin == gossiper.Name {
+				fmt.Println("Check de", TLCInfoOfPeer.TLCMessage.Origin, (len(ArrayTLCInfo[0:index])))
+				/*if (tlcMessageOfPeer.Confirmed > -1) && ((len(ArrayTLCInfo[0:index]) - 1) >= int(gossiper.MyRound)) {
+					fmt.Println("a")
+					checkMajority++
+					confirmedValidMessages = append(confirmedValidMessages, tlcMessageOfPeer)
+				}*/
+				if gossiper.hasSendClientTLC && ArrayTLCInfo[len(ArrayTLCInfo)-1].TLCMessage.Confirmed > -1 {
+					fmt.Println("a")
+					checkMajority++
+					confirmedValidMessages = append(confirmedValidMessages, ArrayTLCInfo[len(ArrayTLCInfo)-1].TLCMessage)
+				}
+				break
+			}
+			fmt.Println("......................................")
 			//If confirmed and in my round save it to check it
-			if (tlcMessageOfPeer.Confirmed > -1) && (tlcMessageOfPeer.ID == gossiper.MyRound) {
+			fmt.Println("Check de", TLCInfoOfPeer.TLCMessage.Origin, (len(ArrayTLCInfo[0:index])))
+			if (tlcMessageOfPeer.Confirmed > -1) && ((len(ArrayTLCInfo[0:index]) - 1) >= int(gossiper.MyRound)) {
+				fmt.Println("b")
 				checkMajority++
 				confirmedValidMessages = append(confirmedValidMessages, tlcMessageOfPeer)
+				break
 			}
 		}
 	}
 	var indexOfMyTLC int
-	for index, myTLCInfo := range gossiper.savedTLCMessages[gossiper.Name] {
-		if myTLCInfo.TLCMessage.ID == gossiper.MyRound {
+	for index2, myTLCInfo := range gossiper.savedTLCMessages[gossiper.Name] {
+		if (len(gossiper.savedTLCMessages[gossiper.Name][:index2])) == int(gossiper.MyRound) {
 			ownCheck = true
-			indexOfMyTLC = index
+			indexOfMyTLC = index2
 			if myTLCInfo.TLCMessage.Confirmed > -1 {
 				ownMessageConfirmed = true
 			}
+			break
 		}
 	}
-	if checkMajority+1 > gossiper.N/2 {
+	fmt.Println("numero de mayoria", checkMajority)
+	if checkMajority > gossiper.N/2 {
 		majority = true
 	}
 	//We have to adopt another TLC message of another guy and rebroadcast it
 	if ownMessageConfirmed == false {
 		//TODO: Maybe I have to stop trying to confirm my original message
 		//sendTLCMessageFromClient(&lastMessageOfOtherGuy, gossiper)
-		gossiper.savedTLCMessages[gossiper.Name][indexOfMyTLC].StopAcking = true
+		//just in case our client has not spoken
+		if len(gossiper.savedTLCMessages[gossiper.Name]) > 0 {
+			gossiper.savedTLCMessages[gossiper.Name][indexOfMyTLC].StopAcking = true
+		}
+
 	}
+	fmt.Println("mayoria", majority)
+	fmt.Println("own check", ownCheck)
 	//Next round
 	if majority && ownCheck {
 		gossiper.MyRound++
@@ -1882,6 +1970,7 @@ func myTimeChecker(gossiper *Gossiper) {
 		//Delete last comma
 		auxString = auxString[:len(auxString)-1]
 		fmt.Println("ADVANCING TO round " + strconv.FormatInt(int64(gossiper.MyRound), 10) + " BASED ON CONFIRMED MESSAGES" + auxString)
+		gossiper.hasSendClientTLC = false
 	}
 }
 func createNewStatusPackageAndSend(sender *net.UDPAddr, gossiper *Gossiper) {
@@ -2082,6 +2171,7 @@ func createNewGossiper(gossipAddr *string, gossiperName *string, gossiperMode *b
 		MyRound:              0,
 		ackAll:               *ackAll,
 		savedTLCMessages:     make(map[string][]TLCMensInfo),
+		hasSendClientTLC:     false,
 	}
 }
 func antiEntropy(gossiper *Gossiper) {
@@ -2184,7 +2274,8 @@ func stubbornTimeoutChecker(gossiper *Gossiper) {
 			if (TLCMessage.Timeout <= 0) && (TLCMessage.TLCMessage.Confirmed == -1) && (TLCMessage.StopAcking == false) {
 
 				//To create a new one
-				sendTLCMessageFromClient(&TLCMessage.TLCMessage, gossiper)
+				choosenPeer := choseRandomPeerAndSendTLCPackage(&TLCMessage.TLCMessage, gossiper)
+				connectionCreationRumorMessage(choosenPeer, nil, &TLCMessage.TLCMessage, gossiper)
 				return
 			} else if TLCMessage.TLCMessage.Confirmed == -1 {
 				//Decrement sessions in 10 of millisecond
