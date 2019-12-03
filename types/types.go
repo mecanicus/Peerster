@@ -105,7 +105,7 @@ type BlockPublish struct {
 type TLCMessage struct {
 	Origin      string
 	ID          uint32
-	Confirmed   bool
+	Confirmed   int
 	TxBlock     BlockPublish
 	VectorClock *StatusPacket //(used in Exercise 3, for now nil)
 	Fitness     float32       //(used in Exercise 4, for now 0)
@@ -143,6 +143,7 @@ type TLCMensInfo struct {
 	TLCMessage TLCMessage
 	Timeout    int
 	AmountACK  map[string]bool //Key the peer ACKing, value if acked or not
+	StopAcking bool
 }
 type StatusPacket struct {
 	Want []PeerStatus

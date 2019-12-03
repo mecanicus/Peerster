@@ -101,8 +101,7 @@ function getListAvailableFiles(){
         url: "http://localhost:8080/filesReadyToDownload",
     })
     .done(function( data, textStatus, jqXHR ) {
-        console.log(data)
-        console.log(data[0])
+
         $.each(data, function(i, p) {
             var exists = $("#selectFiles option")
                .filter(function (i, o) { return o.value === p; })
@@ -133,26 +132,7 @@ function requestDiscoveredFile(){
         console.log( "Fail " +  textStatus);
     });
 }
-function requestFile(){
-    selectedOrigin = $('#selectOriginForFileRequest').find(":selected").text();
-    requestedFileHash = document.getElementById("requestFileHash").value
-    fileName = document.getElementById("fileName").value
-    document.getElementById('requestFileHash').value = ''
-    document.getElementById('fileName').value = ''
-    //console.log(newNode)
-    $.ajax({
-        data: {"selectedOrigin" : selectedOrigin, "requestedFileHash": requestedFileHash,"fileName" :fileName},
-        type: "POST",
-        dataType: "json",
-        url: "http://localhost:8080/requestFile",
-    })
-    .done(function( data, textStatus, jqXHR ) {
-		//console.log(selectedNode)
-    })
-    .fail(function( jqXHR, textStatus, errorThrown ) {
-        console.log( "Fail " +  textStatus);
-    });
-}
+
 function getMessagesList(){
     $.ajax({
         data: {},
@@ -245,6 +225,24 @@ function getOriginsList(){
     });
 }
 function sendPrivateMessage(){
+    selectedOrigin = $('#selectOrigin').find(":selected").text();
+    messageString = document.getElementById("privateMessageString").value
+    document.getElementById('privateMessageString').value = ''
+    //console.log(newNode)
+    $.ajax({
+        data: {"selectedOrigin" : selectedOrigin, "privateMessageString": messageString},
+        type: "POST",
+        dataType: "json",
+        url: "http://localhost:8080/privateMessage",
+    })
+    .done(function( data, textStatus, jqXHR ) {
+		//console.log(selectedNode)
+    })
+    .fail(function( jqXHR, textStatus, errorThrown ) {
+        console.log( "Fail " +  textStatus);
+    });
+}
+function downloadSelectedFile(){
     selectedOrigin = $('#selectOrigin').find(":selected").text();
     messageString = document.getElementById("privateMessageString").value
     document.getElementById('privateMessageString').value = ''
